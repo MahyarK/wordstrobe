@@ -1,6 +1,7 @@
 // Spike: Vision OCR latency, cold vs warm, on a rendered screen-like 1600x1000 px image.
 // Run: swiftc -O -o /tmp/ocr_latency spikes/ocr_latency.swift && /tmp/ocr_latency
-// Result on M3 Pro / macOS 26.6: accurate 508 ms cold, ~300 ms warm; fast ~35 ms;
+// Result on M3 Pro / macOS 26.6: accurate 508 ms cold, ~300 ms warm; fast ~70 ms (needs minimumTextHeightFraction = 0,
+// otherwise it silently drops text shorter than 1/32 of the image);
 // RecognizeDocumentsRequest ~270 ms and returns ready-made paragraphs.
 import AppKit
 import Vision
@@ -36,8 +37,9 @@ for i in 1...3 {
     t0 = Date()
     var fast = RecognizeTextRequest()
     fast.recognitionLevel = .fast
-    _ = try await fast.perform(on: cg)
-    print("text fast     #\(i): \(ms(since: t0)) ms")
+    fast.minimumTextHeightFraction = 0
+    let fastLines = try await fast.perform(on: cg)
+    print("text fast     #\(i): \(ms(since: t0)) ms, \(fastLines.count) lines")
 
     t0 = Date()
     let docs = try await RecognizeDocumentsRequest().perform(on: cg) // macOS 26+

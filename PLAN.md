@@ -52,7 +52,7 @@ Accounts, cloud OCR, sync, plugin system, Mac App Store. The sandbox would block
 | Experiment | Result | Consequence |
 |---|---|---|
 | `RecognizeTextRequest` `.accurate`, 1600×1000 px region | **413–508 ms cold, ~300 ms warm** | Keep the OCR process alive and pre-warm it at launch. |
-| `RecognizeTextRequest` `.fast` | **~35 ms** warm | Optional "quick mode". The accurate path stays the default. |
+| `RecognizeTextRequest` `.fast` (with `minimumTextHeightFraction = 0`) | **~70 ms** warm at 1600×1000, ~27 ms on small images | Optional "quick mode". Latin scripts only: auto-language German loses umlauts (0.95), and Chinese scores 0. The accurate path stays the default. (The first spike's 35 ms run recognized no text, because Vision's default minimum text height is 1/32 of the image.) |
 | `RecognizeDocumentsRequest` (macOS 26+) | **~270 ms** and returns **paragraphs** with lines already joined | Use it on macOS 26+. It's faster than accurate text and skips paragraph heuristics. |
 | Web Speech in WKWebView | `boundary` events with `charIndex`, `charLength`, `elapsedTime` per word | Read-along sync works from the webview. `getVoices()` is empty until `voiceschanged` fires. |
 | `screencapture` without Screen Recording permission | Exits 1, prints "could not create image from rect", **writes no file** | Always preflight permission. Otherwise "no permission" looks the same as "user pressed Esc". |
@@ -243,7 +243,7 @@ Errors: *No text found* (auto-closes after 1.5 s) and *Permission needed* (butto
 - **macOS 26+:** `RecognizeDocumentsRequest` → `document.paragraphs[].transcript`. Detected tables and lists are flagged so the reader can suggest Text view instead of RSVP.
 - **macOS 15–25:** `RecognizeTextRequest` (`.accurate`, `usesLanguageCorrection`, `automaticallyDetectsLanguage`) → `lines` with normalized boxes and confidence. `text.ts` groups them into paragraphs.
 - `NLLanguageRecognizer.dominantLanguage` → `lang` (BCP-47) for the tokenizer and voice.
-- Settings: OCR languages (auto or pinned list), quality (`accurate`, or `fast` at ~35 ms).
+- Settings: OCR languages (auto or pinned list), quality (`accurate`, or `fast` at ~70 ms: pin `langs`, and don't offer it for CJK).
 - `wordstrobe-ocr --selftest`:
   - Renders known passages (Latin, German umlauts, Chinese; dark-on-light and light-on-dark; 11–28 px).
   - OCRs them and asserts ≥ 98 % character accuracy.
@@ -424,7 +424,7 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
 1. **Pre-warm everything at launch.** Start the helper and run one blank OCR, which saves 100–200 ms of Vision cold start (*measured* 413–508 → ~300 ms). Create the reader webview hidden, so showing it is ~free.
 2. **Show, then fill.** The popup appears at mouse-up and OCR lands about 300 ms later, so most of the latency is hidden.
 3. **Best request per OS.** On macOS 26+, the documents request is faster than accurate text, and its paragraphs skip the heuristics.
-4. **Quick mode.** `.fast` OCR (~35 ms, *measured*) as an opt-in for large or simple captures. The selftest quantifies how much accuracy it loses.
+4. **Quick mode.** `.fast` OCR (~70 ms, *measured*) as an opt-in for large or simple Latin-script captures. The selftest quantifies how much accuracy it loses.
 5. **Drift-free player.** Precomputed schedule, a single rAF loop, swaps aligned to frames, no allocations per frame, three `textContent` writes per word, and a fixed grid with no layout shift.
 6. **Idle means nothing runs.** No timers while hidden, and the helper blocks on reading stdin. If idle RSS ever matters, add an option to stop the helper after 10 min idle at the cost of a ~500 ms cold start.
 7. **Small.** Vanilla TS, only the needed plugins, target DMG < 15 MB. Long text: tokenizing is O(n) (10k words < 10 ms), and the text view uses `content-visibility: auto` instead of a virtual list.

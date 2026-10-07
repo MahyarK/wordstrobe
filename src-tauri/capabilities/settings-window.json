@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings-window",
+  "description": "Settings window: read and write the settings store. Global shortcuts and autostart are added with the milestones that need them. No shell.",
+  "windows": ["settings"],
+  "permissions": [
+    "store:allow-load",
+    "store:allow-get-store",
+    "store:allow-get",
+    "store:allow-has",
+    "store:allow-keys",
+    "store:allow-values",
+    "store:allow-entries",
+    "store:allow-length",
+    "store:allow-set",
+    "store:allow-delete",
+    "store:allow-clear",
+    "store:allow-reset",
+    "store:allow-save",
+    "store:allow-reload"
+  ]
+}

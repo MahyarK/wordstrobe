@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wordstrobe Settings</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Permissions</h1>
+      <p class="row"><span id="dot" class="dot"></span><strong>Screen Recording</strong><span id="state">Checking…</span></p>
+      <p class="hint">
+        Wordstrobe needs Screen Recording to read the region you select. macOS applies a new grant only after the app relaunches.
+      </p>
+      <div class="buttons">
+        <button id="request" type="button">Request</button>
+        <button id="open" type="button">Open System Settings</button>
+        <button id="relaunch" type="button">Relaunch</button>
+      </div>
+    </main>
+    <script type="module" src="./settings.ts"></script>
+  </body>
+</html>
