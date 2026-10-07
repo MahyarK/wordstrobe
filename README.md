@@ -1,4 +1,4 @@
-# RSVP
+# Wordstrobe
 
 Read any text on your screen faster. Press a shortcut, drag a box around text like a screenshot,
 and a small popup flashes it one word at a time (Rapid Serial Visual Presentation), with optional

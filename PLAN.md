@@ -1,4 +1,4 @@
-# RSVP: Implementation Plan
+# Wordstrobe: Implementation Plan
 
 > Press a shortcut, drag a box around any text on screen, and read it in a small popup that
 > shows one word at a time (Rapid Serial Visual Presentation), with optional read-aloud.
@@ -63,13 +63,13 @@ Accounts, cloud OCR, sync, plugin system, Mac App Store. The sandbox would block
 ## 3. Architecture
 
 ```
-                 ┌──────────────────── RSVP.app — Tauri v2, menu-bar only (Accessory policy) ────────────────────┐
-  ⌥⇧R ─────────▶ │  Rust core  (src-tauri/src)                                                                │
-  (global        │   • tray menu, global shortcuts, single-instance, settings store                           │
-   shortcut)     │   • flow: preflight → capture → show popup → OCR → emit text                               │
+                 ┌───────────────── Wordstrobe.app — Tauri v2, menu-bar only (Accessory policy) ────────────────┐
+  ⌥⇧R ─────────▶ │  Rust core  (src-tauri/src)                                                                  │
+  (global        │   • tray menu, global shortcuts, single-instance, settings store                             │
+   shortcut)     │   • flow: preflight → capture → show popup → OCR → emit text                                 │
                  │        │ spawn per capture                       │ JSON lines over stdin/stdout (long-lived) │
                  │        ▼                                         ▼                                           │
-                 │   /usr/sbin/screencapture -i -x tmp.png     rsvp-ocr  (Swift sidecar: Vision + NaturalLanguage)│
+                 │   /usr/sbin/screencapture -i -x tmp.png  wordstrobe-ocr (Swift: Vision OCR + NaturalLanguage)│
                  │                                                  │ { paragraphs | lines, lang, ms }          │
                  │                                                  ▼ event "reader:load"                       │
                  │  ┌────────── reader window (hidden, pre-created) ──────────┐  ┌──── settings window ────┐    │
@@ -105,9 +105,9 @@ pub fn ocr(capture: &Capture) -> Result<OcrResult>;   // { paragraphs?, lines?, 
 - Linking Swift into Rust (`swift-rs`) costs build complexity and buys about 1 ms of IPC. Not worth it.
 
 ### IPC contracts
-**Rust ⇄ `rsvp-ocr`** (one JSON object per line):
+**Rust ⇄ `wordstrobe-ocr`** (one JSON object per line):
 ```jsonc
-→ {"id":7,"path":"/…/rsvp/7.png","langs":[],"fast":false}
+→ {"id":7,"path":"/…/wordstrobe/7.png","langs":[],"fast":false}
 ← {"id":7,"paragraphs":["Rapid serial visual …"],"lang":"en","ms":271}     // macOS 26+
 ← {"id":7,"lines":[{"t":"Rapid serial","x":0.04,"y":0.06,"w":0.5,"h":0.03,"c":0.98}],"lang":"en","ms":300} // macOS 15–25
 ← {"id":7,"error":"…"}
@@ -132,7 +132,7 @@ hotkey ─▶ busy? ─yes─▶ ignore
  has_capture_permission()? ─no─▶ open Settings › Permissions (request · open System Settings · relaunch)
             │yes
             ▼
- spawn `screencapture -i -x $TMPDIR/rsvp/<n>.png` ─▶ wait
+ spawn `screencapture -i -x $TMPDIR/wordstrobe/<n>.png` ─▶ wait
             │
    file missing? ─yes─▶ cancelled → done (silent)
             │no
@@ -237,14 +237,14 @@ Errors: *No text found* (auto-closes after 1.5 s) and *Permission needed* (butto
 
 ---
 
-## 7. OCR (`src-tauri/helper/rsvp-ocr.swift`)
+## 7. OCR (`src-tauri/helper/wordstrobe-ocr.swift`)
 
 - Long-lived process, spawned at app start through the Tauri shell plugin (`externalBin`). It pre-warms, respawns on exit, and has one request in flight (the busy guard).
 - **macOS 26+:** `RecognizeDocumentsRequest` → `document.paragraphs[].transcript`. Detected tables and lists are flagged so the reader can suggest Text view instead of RSVP.
 - **macOS 15–25:** `RecognizeTextRequest` (`.accurate`, `usesLanguageCorrection`, `automaticallyDetectsLanguage`) → `lines` with normalized boxes and confidence. `text.ts` groups them into paragraphs.
 - `NLLanguageRecognizer.dominantLanguage` → `lang` (BCP-47) for the tokenizer and voice.
 - Settings: OCR languages (auto or pinned list), quality (`accurate`, or `fast` at ~35 ms).
-- `rsvp-ocr --selftest`:
+- `wordstrobe-ocr --selftest`:
   - Renders known passages (Latin, German umlauts, Chinese; dark-on-light and light-on-dark; 11–28 px).
   - OCRs them and asserts ≥ 98 % character accuracy.
   - Prints latencies.
@@ -315,7 +315,7 @@ rsvp/
 │   ├── Cargo.toml · tauri.conf.json · capabilities/{reader,settings}.json
 │   ├── src/main.rs               # tray, hotkeys, windows, flow
 │   ├── src/platform/macos.rs     # screencapture, permission FFI, helper client
-│   └── helper/rsvp-ocr.swift     # Vision OCR daemon + --selftest
+│   └── helper/wordstrobe-ocr.swift     # Vision OCR daemon + --selftest
 └── .github/workflows/{ci,release}.yml
 ```
 Tauri plugins, each added in the milestone that first needs it: `global-shortcut`, `shell` (sidecar
@@ -334,12 +334,12 @@ only), `store`, `single-instance` (M0–M2), `autostart`, `updater`, `process` (
 ### M1 — Capture → OCR · 2 d
 - Global hotkey ⌥⇧R with a busy guard.
 - Permission preflight plus the Settings › Permissions panel (request, deep link, relaunch).
-- Capture with `screencapture -i -x` into `$TMPDIR/rsvp/` (mode 0700). A missing file means cancelled. The file is always deleted after OCR.
-- `rsvp-ocr` helper:
+- Capture with `screencapture -i -x` into `$TMPDIR/wordstrobe/` (mode 0700). A missing file means cancelled. The file is always deleted after OCR.
+- `wordstrobe-ocr` helper:
   - JSON-lines loop.
   - Documents path (26+) and text path (15–25).
   - Language detection, pre-warm, `--selftest`.
-  - Universal build (`swiftc` arm64 + x86_64 → `lipo`) into `src-tauri/binaries/rsvp-ocr-universal-apple-darwin` via `beforeBuildCommand`.
+  - Universal build (`swiftc` arm64 + x86_64 → `lipo`) into `src-tauri/binaries/wordstrobe-ocr-universal-apple-darwin` via `beforeBuildCommand`.
 - ✅ Hotkey → drag → text in the log, < 450 ms p50 from mouse-up. Esc cancels silently. A denied permission opens the panel. The selftest passes in CI.
 
 ### M2 — RSVP reader · 3 d → **v0.1 (internal)**
@@ -363,7 +363,7 @@ only), `store`, `single-instance` (M0–M2), `autostart`, `updater`, `process` (
 ### M5 — More inputs · 2 d → v1.1
 - **Read Selection ⌥⇧S:** read `AXSelectedText` from the focused element. Fallback: synthesize ⌘C and restore the clipboard. Exact text, no OCR.
 - **Read Clipboard ⌥⇧V**, and drop text or images onto the popup or tray.
-- `rsvp://read?text=…` URL scheme (Raycast, Alfred, Shortcuts) and a macOS Services menu entry, "Read with RSVP".
+- `wordstrobe://read?text=…` URL scheme (Raycast, Alfred, Shortcuts) and a macOS Services menu entry, "Read with Wordstrobe".
 - Opt-in local history (last 50).
 
 ### M6 — Shared region overlay · 3 d (needed for Windows and X11)
@@ -386,7 +386,7 @@ See §13.
 
 | Concern | macOS | Windows | Linux X11 | Linux Wayland |
 |---|---|---|---|---|
-| Global hotkey | `global-shortcut` plugin (Carbon, no permission) | same (`RegisterHotKey`) | same (X grab) | **GlobalShortcuts portal** (`ashpd`; KDE, GNOME ≥ 48, Hyprland). Fallback: bind a desktop shortcut to `rsvp --read-region`, which single-instance forwards to the running app. |
+| Global hotkey | `global-shortcut` plugin (Carbon, no permission) | same (`RegisterHotKey`) | same (X grab) | **GlobalShortcuts portal** (`ashpd`; KDE, GNOME ≥ 48, Hyprland). Fallback: bind a desktop shortcut to `wordstrobe --read-region`, which single-instance forwards to the running app. |
 | Region select | `screencapture -i` (or the M6 overlay) | M6 overlay | M6 overlay | **Screenshot portal** `interactive: true` (the desktop's own picker) |
 | OCR | Vision via Swift sidecar | **`Windows.Media.Ocr`** in-process via `windows-rs` (Win10+, installed language packs) | **Tesseract** CLI, TSV output → `lines` | same |
 | Read aloud | Web Speech ✔ *measured* | Web Speech in WebView2 (spike in M7, same as `spikes/webspeech_boundary`) | WebKitGTK speech is unreliable → **speech-dispatcher** with SSML `<mark/>` per word. Fallback: timing estimated from character count. | same |
@@ -435,11 +435,11 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
 ## 15. Privacy & security
 
 - **On-device only.** Vision OCR and system voices. The only network call is the update check, which can be switched off. No analytics.
-- **Captures** go to `$TMPDIR/rsvp/` (0700) and are deleted right after OCR, including on errors. They're never logged. Text lives in memory unless history is switched on (opt-in, local).
+- **Captures** go to `$TMPDIR/wordstrobe/` (0700) and are deleted right after OCR, including on errors. They're never logged. Text lives in memory unless history is switched on (opt-in, local).
 - **Tauri capabilities, least privilege per window:**
   - The reader gets event listen, hide/drag, clipboard write, and store read.
   - Settings gets store read/write, global shortcuts, and autostart.
-  - The shell scope allows **only** the `rsvp-ocr` sidecar. `screencapture` is spawned from Rust and never exposed to JS.
+  - The shell scope allows **only** the `wordstrobe-ocr` sidecar. `screencapture` is spawned from Rust and never exposed to JS.
 - Strict CSP and no remote content.
 - Hardened runtime with no extra entitlements. Not sandboxed: Mac App Store distribution would need a ScreenCaptureKit rewrite of capture.
 - LLM features (backlog) are opt-in, and **on-device Foundation Models first**. Any cloud option would be a separate, explicit opt-in with a warning.
@@ -456,7 +456,7 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
   - CJK segmentation.
   - `charIndex` → token mapping.
   - Total duration ±1 %.
-- **OCR:** `rsvp-ocr --selftest` in CI checks character accuracy and latency.
+- **OCR:** `wordstrobe-ocr --selftest` in CI checks character accuracy and latency.
 - **Rust:** tests for popup placement and clamp math (multi-monitor, flip above).
 - **Manual release checklist:**
   - Multi-monitor with mixed DPI; full-screen app Space; Stage Manager.
@@ -475,7 +475,7 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
 - **Release:** a `v*` tag triggers GitHub Actions `tauri-apps/tauri-action` → `--target universal-apple-darwin` → sign (Developer ID Application) → notarize (App Store Connect API key) → GitHub Release with the DMG and the signed updater `latest.json`.
 - **Secrets:** `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_PATH`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 - **Costs:** Apple Developer Program $99/yr (needed for notarization). Windows code signing (Azure Trusted Signing, ~$10/mo) from M7.
-- **Later:** a Homebrew cask (`brew install --cask rsvp`).
+- **Later:** a Homebrew cask (`brew install --cask wordstrobe`).
 
 ---
 
@@ -497,7 +497,7 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
 
 ## 19. Decisions defaulted (change any by editing this file)
 
-1. **Name:** working name **RSVP**, bundle id `com.mahyark.rsvp`. "RSVP" collides with event invitations in search, so pick a final name before M4.
+1. **Name:** **Wordstrobe**, bundle id `com.mahyark.wordstrobe`. As of 2026-10-07, `wordstrobe.com` and `wordstrobe.app` were unregistered, and there were no App Store or GitHub matches. A USPTO/EUIPO trademark search is still to do before M4.
 2. **Hotkeys:** ⌥⇧R region · ⌥⇧S selection · ⌥⇧V clipboard. Avoids ⌘⇧2–5 (system screenshots, Xcode).
 3. **Minimum macOS 15** (Sequoia); macOS 26 gets better paragraphs.
 4. **Universal binary** (Apple Silicon + Intel) for v1. macOS 26 is the last release with Intel support, so Intel can be dropped in 2027.
