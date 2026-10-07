@@ -675,8 +675,15 @@ fn main() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Wordstrobe");
+        .build(tauri::generate_context!())
+        .expect("error while building Wordstrobe")
+        .run(|app, event| {
+            // `open`/Finder on the running app sends a reopen event, not a second launch.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_window(app, "settings");
+            }
+        });
 }
 
 #[cfg(test)]

@@ -247,7 +247,10 @@ Errors: *No text found* (auto-closes after 1.5 s) and *Permission needed* (butto
 - Long-lived process, spawned at app start through the Tauri shell plugin (`externalBin`). It pre-warms, respawns on exit, and has one request in flight (the busy guard).
 - **macOS 26+:** `RecognizeDocumentsRequest` → `document.paragraphs[].transcript`. Detected tables and lists are flagged so the reader can suggest Text view instead of RSVP.
 - **macOS 15–25:** `RecognizeTextRequest` (`.accurate`, `usesLanguageCorrection`, `automaticallyDetectsLanguage`) → `lines` with normalized boxes and confidence. `text.ts` groups them into paragraphs.
-- `NLLanguageRecognizer.dominantLanguage` → `lang` (BCP-47) for the tokenizer and voice.
+- **Before recognition** every image gets a 48 px margin of its corner colour, and light backgrounds are inverted to light-on-dark. *Measured:* dark-on-light text at 11–14 px lost its first letter in 43 of 594 tight crops, and this brings it to 2 of 1188.
+- **Tall images** (> 2000 px) are read as overlapping 1400 px bands, concurrently. A line belongs to the band holding its centre. Images wider than 2000 px also run the fast model and keep its result if it read > 25 % more text.
+- **Lines cut by the top or bottom edge are dropped.** A user's selection often slices through a line, and Vision then returns garbage that can flip language detection. Confidence and glyph height don't separate these; ink in the image's first or last pixel row under the line does (*measured* on 288 cut cases, no garbage left).
+- `NLLanguageRecognizer` on the kept text → `lang` (BCP-47) for the tokenizer and voice, or `"und"` when its top hypothesis is below 0.5.
 - Settings: OCR languages (auto or pinned list), quality (`accurate`, or `fast` at ~70 ms: pin `langs`, and don't offer it for CJK).
 - `wordstrobe-ocr --selftest`:
   - Renders known passages (Latin, German umlauts, Chinese; dark-on-light and light-on-dark; 11–28 px).
