@@ -60,11 +60,13 @@ const chunkEl = $("chunk");
 const contextEl = $("context");
 const messageEl = $("message");
 const summaryEl = $("summary");
+const doneEl = $("done");
 const heroEl = $("d-hero");
+const heroUnit = document.createElement("small");
 const heroLabelEl = $("d-hero-label");
-const factWords = $("d-words");
-const factTime = $("d-time");
-const factPace = $("d-pace");
+const paceEl = $("d-pace");
+const metaEl = $("d-meta");
+$("d-avg").textContent = String(AVERAGE_WPM);
 const textEl = $("text");
 const statsEl = $("stats");
 const toastEl = $("toast");
@@ -236,14 +238,19 @@ function setState(next: State): void {
   if (next === "done") {
     const words = tokens.length;
     const saved = (words * 60_000) / AVERAGE_WPM - playedMs;
-    const pace = playedMs > 0 ? `${Math.round((words * 60_000) / playedMs)} wpm` : "–";
+    const wpm = playedMs > 0 ? Math.round((words * 60_000) / playedMs) : 0;
     const gained = saved >= 1500;
     // The headline is the time saved; when there is none worth showing, the pace.
-    heroEl.textContent = gained ? `${duration(saved)}` : pace;
-    heroLabelEl.textContent = gained ? `saved vs. a ${AVERAGE_WPM} wpm average` : "average pace";
-    factWords.textContent = String(words);
-    factTime.textContent = duration(playedMs);
-    factPace.textContent = pace;
+    const [num, unit] = gained ? splitDuration(saved) : [String(wpm), "wpm"];
+    heroUnit.textContent = unit;
+    heroEl.replaceChildren(num, heroUnit);
+    heroLabelEl.textContent = gained ? "saved" : "your pace";
+    paceEl.textContent = wpm ? String(wpm) : "–";
+    metaEl.textContent = `${words} ${words === 1 ? "word" : "words"} in ${duration(playedMs)}`;
+    // Bar lengths for the pace comparison, relative to the faster of the two.
+    const top = Math.max(wpm, AVERAGE_WPM);
+    doneEl.style.setProperty("--you", String(wpm / top));
+    doneEl.style.setProperty("--avg", String(AVERAGE_WPM / top));
     summaryEl.textContent =
       `${words} words · ${mmss(playedMs)}` + (gained ? ` · saved ~${mmss(saved)} vs ${AVERAGE_WPM} wpm` : "");
   }
@@ -353,8 +360,10 @@ const mmss = (ms: number): string => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-/** "6s" under a minute, "1:52" above: reads better than "0:06" as a headline. */
-const duration = (ms: number): string => (ms < 59_500 ? `${Math.max(0, Math.round(ms / 1000))}s` : mmss(ms));
+/** "6" + "s" under a minute, "1:52" above: reads better than "0:06" as a headline. */
+const splitDuration = (ms: number): [string, string] =>
+  ms < 59_500 ? [String(Math.max(0, Math.round(ms / 1000))), "s"] : [mmss(ms), ""];
+const duration = (ms: number): string => splitDuration(ms).join("");
 
 function updateStats(): void {
   if (!player) return;

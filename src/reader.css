@@ -202,7 +202,11 @@ kbd {
      biggest font setting still fits the smallest window. Size containment is safe here: the stage's
      size comes from the flex layout around it, never from what is inside. */
   container-type: size;
-  --room: 48px; /* what the sentence line below the word takes: #context (2.9em of 13px) + the gap */
+  /* The word is always centred; the paused sentence is an overlay under it (#context). It needs
+     46 px (two 13 px lines + the gap), of which the footer's stats line lends ~20 px while paused,
+     so the word keeps --room clear on both sides to stay centred and still leave the sentence room. */
+  --room: 26px;
+  --wfs: max(12px, min(var(--fs, 44px), 10cqi, calc((100cqb - 2 * var(--room) - 14px) / 1.25)));
 }
 
 #app[data-context="off"] #stage {
@@ -217,7 +221,9 @@ kbd {
   display: flex;
 }
 
-#app[data-state="ready"] #dot {
+/* The start-delay countdown is the notches drawing in (see "the word"); the dot only stands in
+   when there are no notches: chunks and words shown whole. */
+#app[data-state="ready"]:is([data-chunk], :has(#word[data-nopivot])) #dot {
   display: block;
 }
 
@@ -261,7 +267,7 @@ kbd {
 #word {
   grid-template-columns: minmax(0, 2fr) auto minmax(0, 3fr);
   align-items: center;
-  font-size: max(12px, min(var(--fs, 44px), 10cqi, calc((100cqb - var(--room) - 14px) / 1.25)));
+  font-size: var(--wfs);
   line-height: 1.25;
   font-weight: 500;
   letter-spacing: -0.012em;
@@ -293,10 +299,17 @@ kbd {
   min-width: 0;
 }
 
+/* The strobe: the pivot carries a soft glow of its own colour while words are flashing. */
 #word .pivot {
   grid-area: 2 / 2;
   color: var(--pivot);
   font-weight: 600;
+  text-shadow: 0 0 0.42em color-mix(in srgb, var(--pivot) 55%, transparent);
+  transition: text-shadow 0.3s var(--ease);
+}
+
+#app[data-state="paused"] #word .pivot {
+  text-shadow: none;
 }
 
 #word .r {
@@ -311,15 +324,36 @@ kbd {
   height: 7px;
   border-radius: 1px;
   background: var(--pivot);
-  opacity: 0.75;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--pivot) 60%, transparent);
+  opacity: 0.85;
+  transition: opacity 0.3s var(--ease);
 }
 
 #word .tick.top {
   grid-row: 1;
+  transform-origin: top;
 }
 
 #word .tick.bottom {
   grid-row: 3;
+  transform-origin: bottom;
+}
+
+/* Countdown: the notches draw in from the reticle lines towards the word over the start delay. */
+#app[data-state="ready"] #word .tick {
+  animation: arm var(--delay, 600ms) var(--ease) both;
+}
+
+@keyframes arm {
+  from {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+}
+
+#app[data-state="paused"] #word .tick {
+  opacity: 0.3;
+  box-shadow: none;
 }
 
 /* No pivot (right-to-left and Indic scripts, PLAN §5.2): the whole word, in the text colour,
@@ -327,7 +361,7 @@ kbd {
    off one side. */
 #word[data-nopivot] {
   grid-template-columns: minmax(0, 1fr);
-  font-size: max(12px, min(var(--fs, 44px), calc(100cqi / (var(--n, 1) * 0.6)), calc((100cqb - var(--room)) / 1.25)));
+  font-size: max(12px, min(var(--fs, 44px), calc(100cqi / (var(--n, 1) * 0.6)), calc((100cqb - 2 * var(--room)) / 1.25)));
 }
 
 #word[data-nopivot] .pivot {
@@ -345,7 +379,7 @@ kbd {
    covers three average words; --n comes from the renderer) rather than wrapping and clipping. */
 #chunk {
   padding: 0 6px;
-  font-size: max(12px, min(calc(var(--fs, 44px) * 0.8), calc((100cqi - 12px) / (var(--n, 1) * 0.56)), calc((100cqb - var(--room)) / 1.25)));
+  font-size: max(12px, min(calc(var(--fs, 44px) * 0.8), calc((100cqi - 12px) / (var(--n, 1) * 0.56)), calc((100cqb - 2 * var(--room)) / 1.25)));
   line-height: 1.25;
   font-weight: 500;
   letter-spacing: -0.012em;
@@ -353,14 +387,17 @@ kbd {
   white-space: nowrap;
 }
 
-/* Reserved even while empty, so the word never moves when the sentence fades in. Two lines at
-   most (the --room of the stage): a longer sentence in a narrow window is cut with an ellipsis,
-   not spilled over the footer. */
+/* An overlay just under the reticle (half the word block below the centre, plus a gap), so the
+   word stays centred and never moves when the sentence fades in. Two lines at most: a longer
+   sentence in a narrow window is cut with an ellipsis. */
 #context {
+  position: absolute;
+  top: calc(50% + var(--wfs) * 0.625 + 15px);
+  left: 0;
+  right: 0;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-  min-height: 2.9em;
   margin: 0;
   padding: 0 6px;
   font-size: 13px;
@@ -477,9 +514,9 @@ kbd {
 /* ---- done: the headline number, the facts beside it, the actions below --------------------- */
 
 #done {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
   grid-template-areas:
-    "hero facts"
+    "hero pace"
     "actions actions";
   align-items: center;
   column-gap: 22px;
@@ -497,12 +534,20 @@ kbd {
 }
 
 #done .num {
-  font-size: clamp(26px, 30cqb, 46px);
+  font-size: clamp(26px, 32cqb, 50px);
   line-height: 1;
   font-weight: 600;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* The unit sits small and muted beside the number: "5" carries the headline, "s" just names it. */
+#done .num small {
+  margin-left: 0.08em;
+  font: 500 0.36em/1 var(--mono);
+  letter-spacing: 0;
+  color: var(--muted);
 }
 
 #done .label {
@@ -513,33 +558,74 @@ kbd {
   text-overflow: ellipsis;
 }
 
-/* Facts read like a receipt: label left, value right, a hairline to the left of the column. */
-.facts {
-  grid-area: facts;
+/* Pace against the average reader, as two bars that grow in: the saving, drawn. Lengths come
+   from --you and --avg (0..1, relative to the faster one), set on #done when the session ends. */
+.pace {
+  grid-area: pace;
   display: grid;
-  gap: 3px;
-  margin: 0;
-  padding-left: 18px;
+  gap: 7px;
+  padding-left: 20px;
   border-left: 1px solid var(--edge);
   animation: rise 0.45s 0.06s var(--ease) both;
 }
 
-.facts div {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.facts dt {
+.pace .row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 10px;
   font-size: 12px;
   color: var(--muted);
 }
 
-.facts dd {
-  margin: 0;
-  font: 500 12px/1.5 var(--mono);
+.pace .row i {
+  position: relative;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--soft);
+}
+
+.pace .row i::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  transform-origin: left;
+  animation: grow 0.8s 0.18s var(--ease) both;
+}
+
+.pace .you i::after {
+  width: calc(var(--you, 0) * 100%);
+  background: var(--pivot);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--pivot) 50%, transparent);
+}
+
+.pace .avg i::after {
+  width: calc(var(--avg, 0) * 100%);
+  background: var(--faint);
+}
+
+.pace b {
+  font: 500 12px/1 var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
+  color: var(--fg);
+}
+
+.pace .avg b {
+  color: var(--muted);
+}
+
+#d-meta {
+  margin: 1px 0 0;
+  font: 500 10.5px/1.3 var(--mono);
+  color: var(--faint);
+}
+
+@keyframes grow {
+  from {
+    transform: scaleX(0);
+  }
 }
 
 .actions {
@@ -594,7 +680,7 @@ kbd {
   box-shadow: none;
 }
 
-/* A short window keeps the headline and the actions; the facts are the first thing to go. */
+/* A short window keeps the headline and the actions; the pace chart is the first thing to go. */
 @container (max-height: 118px) {
   #done {
     grid-template-columns: minmax(0, 1fr);
@@ -603,7 +689,7 @@ kbd {
       "actions";
   }
 
-  .facts {
+  .pace {
     display: none;
   }
 }
@@ -631,8 +717,10 @@ kbd {
   #dot,
   #message,
   #done .hero,
-  .facts,
-  .actions {
+  .pace,
+  .pace .row i::after,
+  .actions,
+  #app[data-state] #word .tick {
     animation: none;
   }
 
@@ -682,42 +770,90 @@ kbd {
 
 /* ---- footer ------------------------------------------------------------------------------- */
 
+/* One instrument row: the readout on the left, progress as a ruler of ticks filling red with a
+   glowing head, and toasts taking the ruler's place for a moment. */
 footer {
   flex: none;
-  margin: 0 -18px;
-}
-
-footer .line {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 18px 7px;
-  font: 500 10.5px/1.3 var(--mono);
+  align-items: center;
+  gap: 14px;
+  height: 26px;
+  padding-bottom: 4px;
+  font: 500 10.5px/1 var(--mono);
   letter-spacing: 0.01em;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
+  transition: opacity 0.25s var(--ease);
+}
+
+#stats {
+  flex: none;
+  white-space: nowrap;
+}
+
+#stats:empty {
+  display: none;
 }
 
 #toast {
-  text-align: right;
+  flex: none;
   color: var(--fg);
 }
 
+#toast:empty {
+  display: none;
+}
+
+footer:has(#toast:not(:empty)) #bar {
+  opacity: 0;
+}
+
 #bar {
-  height: 2px;
-  background: var(--soft);
+  position: relative;
+  flex: 1;
+  height: 7px;
+  background: repeating-linear-gradient(90deg, var(--tick) 0 1px, transparent 1px 5px);
+  transition: opacity 0.2s;
 }
 
-/* The filled part ends in a small glowing head, so progress reads at a glance. */
+/* --p (0..1) is set on the <i>: ::before is the red copy of the ruler, clipped to the progress,
+   so the ticks stay crisp instead of stretching; ::after is the head. */
 #bar i {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, var(--pivot) 30%);
-  transform-origin: left;
-  transform: scaleX(var(--p, 0));
+  position: absolute;
+  inset: 0;
 }
 
-#app[data-state="done"] #bar i {
-  opacity: 0.35;
-  transition: opacity 0.6s var(--ease);
+#bar i::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, var(--pivot) 0 1px, transparent 1px 5px);
+  clip-path: inset(0 calc(100% - var(--p, 0) * 100%) 0 0);
+}
+
+#bar i::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: calc(var(--p, 0) * 100% - 1px);
+  width: 2px;
+  border-radius: 1px;
+  background: var(--pivot);
+  box-shadow: 0 0 8px var(--pivot);
+}
+
+/* Nothing to measure while loading or on a message; while paused the sentence overlay borrows
+   this row; when done the ruler stays, full and quiet. */
+#app:is([data-state="loading"], [data-state="error"], [data-state="empty"]) footer,
+#app[data-state="paused"]:not([data-context="off"]) footer {
+  opacity: 0;
+}
+
+#app[data-state="done"] #bar {
+  opacity: 0.4;
+}
+
+#app[data-state="done"] #bar i::after {
+  box-shadow: none;
 }

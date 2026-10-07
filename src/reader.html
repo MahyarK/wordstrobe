@@ -46,11 +46,11 @@
             <span id="d-hero" class="num"></span>
             <span id="d-hero-label" class="label"></span>
           </div>
-          <dl class="facts" aria-hidden="true">
-            <div><dt>Words</dt><dd id="d-words"></dd></div>
-            <div><dt>Time</dt><dd id="d-time"></dd></div>
-            <div><dt>Pace</dt><dd id="d-pace"></dd></div>
-          </dl>
+          <div class="pace" aria-hidden="true">
+            <div class="row you"><span>You</span><i></i><b id="d-pace"></b></div>
+            <div class="row avg"><span>Average</span><i></i><b id="d-avg"></b></div>
+            <p id="d-meta"></p>
+          </div>
           <div class="actions">
             <button id="replay" type="button" tabindex="-1">Replay <kbd>R</kbd></button>
             <button id="copy" type="button" tabindex="-1">Copy <kbd>&#8984;C</kbd></button>
@@ -62,11 +62,9 @@
       <div id="text" data-tauri-drag-region="false"></div>
 
       <footer>
-        <div class="line">
-          <span id="stats"></span>
-          <span id="toast" role="status"></span>
-        </div>
-        <div id="bar"><i></i></div>
+        <span id="stats"></span>
+        <div id="bar" aria-hidden="true"><i></i></div>
+        <span id="toast" role="status"></span>
       </footer>
     </main>
     <script type="module" src="./reader.ts"></script>
