@@ -302,7 +302,7 @@ Dev gotchas:
 ## 10. Repository layout
 
 ```
-rsvp/
+wordstrobe/
 ├── PLAN.md · README.md
 ├── spikes/                       # measured experiments behind this plan
 ├── package.json                  # vite, @tauri-apps/cli, @tauri-apps/api, plugin JS bindings
