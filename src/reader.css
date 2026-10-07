@@ -2,32 +2,59 @@
    attributes and the custom properties --fs (font size), --p (progress) and --n (the width of the
    chunk or whole word on screen in characters, see "the word"). */
 
+/* Bundled, not fetched: the popup is offline and the CSP only allows 'self'. SIL OFL. */
+@font-face {
+  font-family: "Geist";
+  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light dark;
-  --fg: #1d1d1f;
-  --muted: rgba(0, 0, 0, 0.5);
+  --fg: #141416;
+  --muted: rgba(20, 20, 22, 0.52);
+  --faint: rgba(20, 20, 22, 0.32);
   --pivot: #e5372e;
-  --tick: rgba(0, 0, 0, 0.3);
-  --surface: rgba(255, 255, 255, 0.45);
-  --edge: rgba(0, 0, 0, 0.12);
-  --soft: rgba(0, 0, 0, 0.06);
-  --hover: rgba(0, 0, 0, 0.1);
-  --hl: rgba(229, 55, 46, 0.2);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --tick: rgba(20, 20, 22, 0.16);
+  --surface: rgba(255, 255, 255, 0.5);
+  --edge: rgba(0, 0, 0, 0.1);
+  --sheen: rgba(255, 255, 255, 0.7);
+  --glow: rgba(229, 55, 46, 0.07);
+  --soft: rgba(0, 0, 0, 0.05);
+  --hover: rgba(0, 0, 0, 0.09);
+  --pill: rgba(255, 255, 255, 0.6);
+  --hl: rgba(229, 55, 46, 0.18);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --sans: "Geist", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font: 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ponytail: the dark palette is written twice, since CSS has no way to alias a media query to an attribute. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --fg: #f5f5f7;
-    --muted: rgba(255, 255, 255, 0.55);
+    --fg: #f4f4f6;
+    --muted: rgba(244, 244, 246, 0.56);
+    --faint: rgba(244, 244, 246, 0.34);
     --pivot: #ff5a4f;
-    --tick: rgba(255, 255, 255, 0.32);
-    --surface: rgba(28, 28, 30, 0.45);
-    --edge: rgba(255, 255, 255, 0.14);
-    --soft: rgba(255, 255, 255, 0.08);
-    --hover: rgba(255, 255, 255, 0.14);
-    --hl: rgba(255, 90, 79, 0.28);
+    --tick: rgba(244, 244, 246, 0.16);
+    --surface: rgba(22, 22, 24, 0.5);
+    --edge: rgba(255, 255, 255, 0.11);
+    --sheen: rgba(255, 255, 255, 0.09);
+    --glow: rgba(255, 90, 79, 0.11);
+    --soft: rgba(255, 255, 255, 0.07);
+    --hover: rgba(255, 255, 255, 0.13);
+    --pill: rgba(40, 40, 44, 0.72);
+    --hl: rgba(255, 90, 79, 0.26);
   }
 }
 
@@ -37,15 +64,19 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --fg: #f5f5f7;
-  --muted: rgba(255, 255, 255, 0.55);
+  --fg: #f4f4f6;
+  --muted: rgba(244, 244, 246, 0.56);
+  --faint: rgba(244, 244, 246, 0.34);
   --pivot: #ff5a4f;
-  --tick: rgba(255, 255, 255, 0.32);
-  --surface: rgba(28, 28, 30, 0.45);
-  --edge: rgba(255, 255, 255, 0.14);
-  --soft: rgba(255, 255, 255, 0.08);
-  --hover: rgba(255, 255, 255, 0.14);
-  --hl: rgba(255, 90, 79, 0.28);
+  --tick: rgba(244, 244, 246, 0.16);
+  --surface: rgba(22, 22, 24, 0.5);
+  --edge: rgba(255, 255, 255, 0.11);
+  --sheen: rgba(255, 255, 255, 0.09);
+  --glow: rgba(255, 90, 79, 0.11);
+  --soft: rgba(255, 255, 255, 0.07);
+  --hover: rgba(255, 255, 255, 0.13);
+  --pill: rgba(40, 40, 44, 0.72);
+  --hl: rgba(255, 90, 79, 0.26);
 }
 
 /* Transparent so the window's hudWindow vibrancy shows through. */
@@ -61,6 +92,8 @@ body {
   cursor: default;
 }
 
+/* The glass: vibrancy underneath, a faint red glow from the corner the eye starts in, a lit top
+   edge and a hairline border. */
 #app {
   position: relative;
   box-sizing: border-box;
@@ -69,32 +102,66 @@ body {
   flex-direction: column;
   padding: 14px 18px 0;
   border-radius: 14px;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--edge);
+  background:
+    radial-gradient(140% 120% at 0% 0%, var(--glow), transparent 58%),
+    var(--surface);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    inset 0 0 0 1px var(--edge);
   overflow: hidden;
   outline: none;
 }
 
-/* ---- hover cluster ------------------------------------------------------------------------ */
-
-.cluster {
+.sr {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 2;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-#app:hover .cluster {
-  opacity: 1;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 button {
   font: inherit;
   color: inherit;
+}
+
+kbd {
+  font: 500 10px/1 var(--mono);
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: var(--soft);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+/* ---- hover cluster: a floating glass pill ------------------------------------------------- */
+
+.cluster {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 2;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--pill);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    0 6px 18px rgba(0, 0, 0, 0.18);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 0.2s var(--ease),
+    transform 0.3s var(--ease);
+}
+
+#app:hover .cluster {
+  opacity: 1;
+  transform: none;
 }
 
 .cluster button {
@@ -104,9 +171,12 @@ button {
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .cluster button:hover {
@@ -168,7 +238,7 @@ button {
 }
 
 #app[data-state="done"] #done {
-  display: flex;
+  display: grid;
 }
 
 #app[data-view="text"] #stage {
@@ -183,16 +253,37 @@ button {
 
 /* Pivot column at 40 % of the width. The left part is right-aligned, so it grows leftwards.
    The font is the setting, shrunk to what the stage allows:
-   - 12cqi: the widest word the tokenizer produces (13 letters, pivot on the 4th) has up to 9
+   - 10cqi: the widest word the tokenizer produces (13 letters, pivot on the 4th) has up to 9
      letters right of the pivot, which have 60 % of the width minus half the pivot to themselves;
-   - the height: a line (1.25) and the two 7 px ticks, above the --room that the sentence keeps. */
+   - the height: a line (1.25) and the two 7 px tick rows, above the --room that the sentence keeps.
+   The reticle: a hairline above and below the word, fading out at both ends, with a red notch on
+   each at the pivot, so the eye has one fixed place to land. */
 #word {
   grid-template-columns: minmax(0, 2fr) auto minmax(0, 3fr);
   align-items: center;
   font-size: max(12px, min(var(--fs, 44px), 10cqi, calc((100cqb - var(--room) - 14px) / 1.25)));
   line-height: 1.25;
   font-weight: 500;
+  letter-spacing: -0.012em;
   white-space: pre;
+}
+
+#word::before,
+#word::after {
+  content: "";
+  grid-column: 1 / -1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--tick) 16%, var(--tick) 84%, transparent);
+}
+
+#word::before {
+  grid-row: 1;
+  align-self: start;
+}
+
+#word::after {
+  grid-row: 3;
+  align-self: end;
 }
 
 #word .l {
@@ -216,9 +307,11 @@ button {
 #word .tick {
   grid-column: 2;
   justify-self: center;
-  width: 1px;
+  width: 2px;
   height: 7px;
-  background: var(--tick);
+  border-radius: 1px;
+  background: var(--pivot);
+  opacity: 0.75;
 }
 
 #word .tick.top {
@@ -230,7 +323,7 @@ button {
 }
 
 /* No pivot (right-to-left and Indic scripts, PLAN §5.2): the whole word, in the text colour,
-   centred, without ticks. Its width is its length (--n), so it shrinks to fit instead of running
+   centred, without notches. Its width is its length (--n), so it shrinks to fit instead of running
    off one side. */
 #word[data-nopivot] {
   grid-template-columns: minmax(0, 1fr);
@@ -255,6 +348,7 @@ button {
   font-size: max(12px, min(calc(var(--fs, 44px) * 0.8), calc((100cqi - 12px) / (var(--n, 1) * 0.56)), calc((100cqb - var(--room)) / 1.25)));
   line-height: 1.25;
   font-weight: 500;
+  letter-spacing: -0.012em;
   text-align: center;
   white-space: nowrap;
 }
@@ -274,11 +368,15 @@ button {
   text-align: center;
   color: var(--muted);
   opacity: 0;
-  transition: opacity 0.2s;
+  transform: translateY(3px);
+  transition:
+    opacity 0.25s var(--ease),
+    transform 0.35s var(--ease);
 }
 
 #app[data-state="paused"] #context {
   opacity: 1;
+  transform: none;
 }
 
 #context mark {
@@ -293,11 +391,12 @@ button {
   position: absolute;
   left: 50%;
   bottom: 6px;
-  width: 8px;
-  height: 8px;
-  margin-left: -4px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
   border-radius: 50%;
   background: var(--pivot);
+  box-shadow: 0 0 10px var(--pivot);
   animation: drain var(--delay, 600ms) linear forwards;
 }
 
@@ -312,94 +411,236 @@ button {
 
 #message {
   margin: 0;
-  padding: 0 12px;
+  padding: 0 24px;
   text-align: center;
+  font-size: 14px;
   color: var(--muted);
+  animation: rise 0.4s var(--ease) both;
 }
 
 #app[data-state="error"] #message {
-  color: var(--pivot);
+  color: var(--fg);
 }
 
-/* ---- loading shimmer ---------------------------------------------------------------------- */
+#app[data-state="error"] #message::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 8px 1px 0;
+  border-radius: 50%;
+  background: var(--pivot);
+  box-shadow: 0 0 8px var(--pivot);
+}
+
+/* ---- loading: a red scan sweeping the reticle line ---------------------------------------- */
 
 #shimmer {
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-#shimmer i {
-  display: block;
-  height: 14px;
-  width: 62%;
-  border-radius: 7px;
-  background: linear-gradient(90deg, var(--soft) 25%, var(--hover) 50%, var(--soft) 75%) 0 0 / 300% 100%;
-  animation: shimmer 1.3s linear infinite;
-}
-
-#shimmer i:nth-child(1) {
-  width: 38%;
-}
-
-#shimmer i:nth-child(3) {
-  width: 48%;
-}
-
-@keyframes shimmer {
-  to {
-    background-position-x: -300%;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #shimmer i,
-  #dot {
-    animation: none;
-  }
-}
-
-/* ---- done --------------------------------------------------------------------------------- */
-
-#done {
   flex-direction: column;
   align-items: center;
   gap: 14px;
 }
 
-#summary {
-  margin: 0;
-  padding: 0 12px;
-  text-align: center;
+#shimmer i {
+  position: relative;
+  display: block;
+  width: 64%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--tick) 16%, var(--tick) 84%, transparent);
+}
+
+#shimmer i::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 26%;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--pivot), transparent);
+  filter: drop-shadow(0 0 6px var(--pivot));
+  animation: scan 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+
+#shimmer span {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--faint);
+}
+
+@keyframes scan {
+  to {
+    transform: translateX(285%);
+  }
+}
+
+/* ---- done: the headline number, the facts beside it, the actions below --------------------- */
+
+#done {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "hero facts"
+    "actions actions";
+  align-items: center;
+  column-gap: 22px;
+  row-gap: clamp(8px, 9cqb, 18px);
+  padding: 0 2px;
+}
+
+#done .hero {
+  grid-area: hero;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  animation: rise 0.45s var(--ease) both;
+}
+
+#done .num {
+  font-size: clamp(26px, 30cqb, 46px);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#done .label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Facts read like a receipt: label left, value right, a hairline to the left of the column. */
+.facts {
+  grid-area: facts;
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  border-left: 1px solid var(--edge);
+  animation: rise 0.45s 0.06s var(--ease) both;
+}
+
+.facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.facts dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  font: 500 12px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .actions {
+  grid-area: actions;
   display: flex;
   gap: 8px;
+  animation: rise 0.45s 0.12s var(--ease) both;
 }
 
 .actions button {
-  padding: 5px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 12px;
   font-size: 13px;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
+  font-weight: 500;
+  border: 0;
+  border-radius: 9px;
   background: var(--soft);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  transition:
+    background 0.15s,
+    transform 0.25s var(--ease);
 }
 
 .actions button:hover {
   background: var(--hover);
+  transform: translateY(-1px);
+}
+
+.actions button:active {
+  transform: scale(0.97);
 }
 
 #replay {
-  border-color: transparent;
   background: var(--pivot);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 6px 16px -6px var(--pivot);
   color: #fff;
 }
 
 #replay:hover {
   background: var(--pivot);
   filter: brightness(1.08);
+}
+
+#replay kbd {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  box-shadow: none;
+}
+
+/* A short window keeps the headline and the actions; the facts are the first thing to go. */
+@container (max-height: 118px) {
+  #done {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "hero"
+      "actions";
+  }
+
+  .facts {
+    display: none;
+  }
+}
+
+/* A narrow window drops the key hints before the buttons start to squeeze. */
+@container (max-width: 400px) {
+  .actions kbd {
+    display: none;
+  }
+
+  .actions button {
+    padding: 0 12px;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #shimmer i::after,
+  #dot,
+  #message,
+  #done .hero,
+  .facts,
+  .actions {
+    animation: none;
+  }
+
+  .cluster,
+  #context,
+  .actions button {
+    transition: none;
+  }
 }
 
 /* ---- text view ---------------------------------------------------------------------------- */
@@ -412,7 +653,7 @@ button {
   padding: 2px 18px 6px;
   overflow-y: auto;
   font-size: 15px;
-  line-height: 1.6;
+  line-height: 1.62;
 }
 
 #app[data-view="text"] #text {
@@ -450,10 +691,10 @@ footer .line {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 18px 6px;
-  font-size: 11px;
-  line-height: 1.3;
-  color: var(--muted);
+  padding: 0 18px 7px;
+  font: 500 10.5px/1.3 var(--mono);
+  letter-spacing: 0.01em;
+  color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
 
@@ -464,13 +705,19 @@ footer .line {
 
 #bar {
   height: 2px;
-  background: var(--edge);
+  background: var(--soft);
 }
 
+/* The filled part ends in a small glowing head, so progress reads at a glance. */
 #bar i {
   display: block;
   height: 100%;
-  background: var(--pivot);
+  background: linear-gradient(90deg, transparent, var(--pivot) 30%);
   transform-origin: left;
   transform: scaleX(var(--p, 0));
+}
+
+#app[data-state="done"] #bar i {
+  opacity: 0.35;
+  transition: opacity 0.6s var(--ease);
 }

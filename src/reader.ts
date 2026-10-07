@@ -60,6 +60,11 @@ const chunkEl = $("chunk");
 const contextEl = $("context");
 const messageEl = $("message");
 const summaryEl = $("summary");
+const heroEl = $("d-hero");
+const heroLabelEl = $("d-hero-label");
+const factWords = $("d-words");
+const factTime = $("d-time");
+const factPace = $("d-pace");
 const textEl = $("text");
 const statsEl = $("stats");
 const toastEl = $("toast");
@@ -231,8 +236,16 @@ function setState(next: State): void {
   if (next === "done") {
     const words = tokens.length;
     const saved = (words * 60_000) / AVERAGE_WPM - playedMs;
+    const pace = playedMs > 0 ? `${Math.round((words * 60_000) / playedMs)} wpm` : "–";
+    const gained = saved >= 1500;
+    // The headline is the time saved; when there is none worth showing, the pace.
+    heroEl.textContent = gained ? `${duration(saved)}` : pace;
+    heroLabelEl.textContent = gained ? `saved vs. a ${AVERAGE_WPM} wpm average` : "average pace";
+    factWords.textContent = String(words);
+    factTime.textContent = duration(playedMs);
+    factPace.textContent = pace;
     summaryEl.textContent =
-      `${words} words · ${mmss(playedMs)}` + (saved >= 1500 ? ` · saved ~${mmss(saved)} vs ${AVERAGE_WPM} wpm` : "");
+      `${words} words · ${mmss(playedMs)}` + (gained ? ` · saved ~${mmss(saved)} vs ${AVERAGE_WPM} wpm` : "");
   }
   updateStats();
 }
@@ -339,6 +352,9 @@ const mmss = (ms: number): string => {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
+
+/** "6s" under a minute, "1:52" above: reads better than "0:06" as a headline. */
+const duration = (ms: number): string => (ms < 59_500 ? `${Math.max(0, Math.round(ms / 1000))}s` : mmss(ms));
 
 function updateStats(): void {
   if (!player) return;

@@ -30,7 +30,7 @@
       </div>
 
       <section id="stage" data-tauri-drag-region="false">
-        <div id="shimmer" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div id="shimmer" aria-hidden="true"><i></i><span>Reading text</span></div>
         <div id="word" aria-hidden="true">
           <i class="tick top"></i>
           <span class="l"></span><b class="pivot"></b><span class="r"></span>
@@ -41,11 +41,20 @@
         <i id="dot" aria-hidden="true"></i>
         <p id="message" role="status"></p>
         <div id="done">
-          <p id="summary"></p>
+          <p id="summary" class="sr"></p>
+          <div class="hero" aria-hidden="true">
+            <span id="d-hero" class="num"></span>
+            <span id="d-hero-label" class="label"></span>
+          </div>
+          <dl class="facts" aria-hidden="true">
+            <div><dt>Words</dt><dd id="d-words"></dd></div>
+            <div><dt>Time</dt><dd id="d-time"></dd></div>
+            <div><dt>Pace</dt><dd id="d-pace"></dd></div>
+          </dl>
           <div class="actions">
-            <button id="replay" type="button" tabindex="-1">Replay</button>
-            <button id="copy" type="button" tabindex="-1">Copy</button>
-            <button id="textview" type="button" tabindex="-1">Text view</button>
+            <button id="replay" type="button" tabindex="-1">Replay <kbd>R</kbd></button>
+            <button id="copy" type="button" tabindex="-1">Copy <kbd>&#8984;C</kbd></button>
+            <button id="textview" type="button" tabindex="-1">Full text <kbd>T</kbd></button>
           </div>
         </div>
       </section>
