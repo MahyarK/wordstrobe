@@ -4,104 +4,34 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
+import {
+  LIMITS,
+  PLACEMENTS,
+  THEMES,
+  VOICE_MODES,
+  normalize,
+  oneOf,
+  readPrefs,
+  type Prefs,
+} from "./prefs.ts";
 import { splitOrp } from "./text.ts";
 
 /** Outside Tauri (plain browser via `npm run dev`) the page runs on an in-memory store with no-op invokes. */
 const IN_TAURI = "__TAURI_INTERNALS__" in window;
 
 // ---------------------------------------------------------------------------------------------
-// Settings model
+// Settings model: defaults, limits and validation are shared with the reader (prefs.ts)
 
-type Placement = "cursor" | "center" | "last";
-type Theme = "system" | "light" | "dark";
-type VoiceMode = "along" | "voice";
-
-interface Settings {
-  wpm: number;
-  wordsPerFlash: 1 | 2 | 3;
-  fontSize: number;
-  theme: Theme;
-  startDelay: number;
-  smartResume: boolean;
-  contextLine: boolean;
-  placement: Placement;
-  readAloud: boolean;
-  voiceMode: VoiceMode;
-  /** language prefix ("en") → voiceURI */
-  voices: Record<string, string>;
-  /** Read-only here; Rust registers it at startup (the recorder is M4). */
-  hotkeyRegion: string;
-}
-
-const DEFAULTS: Settings = {
-  wpm: 350,
-  wordsPerFlash: 1,
-  fontSize: 44,
-  theme: "system",
-  startDelay: 600,
-  smartResume: true,
-  contextLine: true,
-  placement: "cursor",
-  readAloud: false,
-  voiceMode: "along",
-  voices: {},
-  hotkeyRegion: "Alt+Shift+R",
-};
+type Settings = Prefs;
 
 type NumKey = "wpm" | "fontSize" | "startDelay";
 type BoolKey = "smartResume" | "contextLine" | "readAloud";
 
 const NUMERIC: Record<NumKey, { min: number; max: number; step: number; format: (n: number) => string }> = {
-  wpm: { min: 100, max: 1200, step: 25, format: String },
-  fontSize: { min: 28, max: 72, step: 1, format: (n) => `${n} px` },
-  startDelay: { min: 0, max: 2000, step: 50, format: (n) => `${n} ms` },
+  wpm: { ...LIMITS.wpm, format: String },
+  fontSize: { ...LIMITS.fontSize, format: (n) => `${n} px` },
+  startDelay: { ...LIMITS.startDelay, format: (n) => `${n} ms` },
 };
-
-const PLACEMENTS: readonly Placement[] = ["cursor", "center", "last"];
-const THEMES: readonly Theme[] = ["system", "light", "dark"];
-const MODES: readonly VoiceMode[] = ["along", "voice"];
-
-const SETTING_KEYS = Object.keys(DEFAULTS) as (keyof Settings)[];
-
-function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
-  return allowed.find((a) => a === value) ?? fallback;
-}
-
-function inRange(value: unknown, key: NumKey): number {
-  const { min, max } = NUMERIC[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(max, Math.max(min, Math.round(value)))
-    : DEFAULTS[key];
-}
-
-function bool(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-/** Whatever is in the file, turned into valid settings: a hand-edited or older store never breaks the page. */
-function normalize(raw: Partial<Record<keyof Settings, unknown>>): Settings {
-  const voices: Record<string, string> = {};
-  if (raw.voices && typeof raw.voices === "object" && !Array.isArray(raw.voices)) {
-    for (const [lang, uri] of Object.entries(raw.voices)) {
-      if (typeof uri === "string" && uri) voices[lang] = uri;
-    }
-  }
-  return {
-    wpm: inRange(raw.wpm, "wpm"),
-    wordsPerFlash: raw.wordsPerFlash === 2 || raw.wordsPerFlash === 3 ? raw.wordsPerFlash : 1,
-    fontSize: inRange(raw.fontSize, "fontSize"),
-    theme: oneOf(raw.theme, THEMES, DEFAULTS.theme),
-    startDelay: inRange(raw.startDelay, "startDelay"),
-    smartResume: bool(raw.smartResume, DEFAULTS.smartResume),
-    contextLine: bool(raw.contextLine, DEFAULTS.contextLine),
-    placement: oneOf(raw.placement, PLACEMENTS, DEFAULTS.placement),
-    readAloud: bool(raw.readAloud, DEFAULTS.readAloud),
-    voiceMode: oneOf(raw.voiceMode, MODES, DEFAULTS.voiceMode),
-    voices,
-    hotkeyRegion:
-      typeof raw.hotkeyRegion === "string" && raw.hotkeyRegion ? raw.hotkeyRegion : DEFAULTS.hotkeyRegion,
-  };
-}
 
 // ---------------------------------------------------------------------------------------------
 // Store access
@@ -133,10 +63,7 @@ async function openStore(): Promise<Kv> {
 let kv: Kv;
 const current: Settings = normalize({});
 
-async function readAll(): Promise<Settings> {
-  const entries = await Promise.all(SETTING_KEYS.map(async (key) => [key, await kv.get(key)] as const));
-  return normalize(Object.fromEntries(entries));
-}
+const readAll = (): Promise<Settings> => readPrefs((key) => kv.get(key));
 
 // Writes are queued, so a slider drag becomes a few `set` calls and one `save`. `flush` is also awaited before
 // every re-read, so the page never shows a stale value over one it has not written yet.
@@ -264,7 +191,7 @@ for (const input of radios("theme")) {
 }
 for (const input of radios("voiceMode")) {
   input.addEventListener("change", () => {
-    if (input.checked) change("voiceMode", oneOf(input.value, MODES, "along"));
+    if (input.checked) change("voiceMode", oneOf(input.value, VOICE_MODES, "along"));
   });
 }
 

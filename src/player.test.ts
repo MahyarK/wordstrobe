@@ -304,6 +304,45 @@ test("frameOfToken maps tokens to the frame that contains them", () => {
 // setWpm
 // ---------------------------------------------------------------------------------------------
 
+test("setWpm rescales the stored factors: nothing is looked at again, and a new Player can reuse them", () => {
+  // Reading `text` is what the factor computation does to every token (alnumCount, endKind, ...).
+  let reads = 0;
+  const base = tokenize(["Überraschungsmomente, schön. Noch ein Satz mit 3 Zahlen.", "Zweiter Absatz."], "de");
+  const tokens = base.map((t) => ({
+    ...t,
+    get text() {
+      reads++;
+      return t.text;
+    },
+  }));
+  const player = new Player(tokens, frames(tokens, 1), { timing: at(300, NO_RAMP) });
+  const built = reads;
+  assert.ok(built >= tokens.length);
+  for (const wpm of [100, 250, 500, 1200, 300]) player.setWpm(wpm, 0);
+  assert.equal(reads, built, "setWpm must not touch the tokens");
+  approx(player.totalMs, sum(delays(base, at(300, NO_RAMP))));
+
+  // chunk change: a second Player over the same text, handed the factors
+  const next = new Player(tokens, frames(tokens, 3), { timing: at(player.wpm, NO_RAMP), factors: player.factors });
+  assert.equal(reads, built, "reusing the factors must not touch the tokens either");
+  approx(next.totalMs, sum(delays(base, at(300, NO_RAMP))));
+  assert.equal(next.factors, player.factors);
+});
+
+test("a chunk-size change keeps the position: the first token of the old frame lands in the new layout's frame", () => {
+  const tokens = tokenize(article(300), "en");
+  for (const [from, to] of [[1, 3], [3, 1], [2, 3], [3, 2], [1, 2]] as const) {
+    const old = new Player(tokens, frames(tokens, from));
+    for (const f of [0, 1, 7, old.frames.length >> 1, old.frames.length - 1]) {
+      const token = old.frames[f]![0]!;
+      const next = new Player(tokens, frames(tokens, to));
+      const g = next.frameOfToken(token);
+      assert.ok(next.frames[g]!.includes(token), `${from}->${to} frame ${f}`);
+      assert.ok(g < next.frames.length); // a frame index of the old layout would not be: that was the bug
+    }
+  }
+});
+
 test("setWpm mid-play rescales the rest of the schedule and keeps the progress inside the frame", () => {
   const tokens = plain(100);
   const player = new Player(tokens, frames(tokens, 1), { timing: at(600, NO_RAMP) }); // 100 ms per word

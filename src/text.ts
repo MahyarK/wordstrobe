@@ -466,7 +466,7 @@ function pivotOffset(letters: number): number {
  * one glyph), and a word in a `NO_PIVOT_SCRIPT` is one pivot as a whole.
  */
 function pivotRange(word: string): [number, number] {
-  if (NO_PIVOT_SCRIPT.test(word)) return [0, word.length];
+  if (!hasPivot(word)) return [0, word.length];
   const gs = glyphs(word);
   let first = -1;
   let last = -1;
@@ -486,6 +486,14 @@ function pivotRange(word: string): [number, number] {
   return [from, from + (gs[p]?.length ?? 0)];
 }
 
+/**
+ * False for a word that is shown whole and centered, without a pivot (PLAN §5.2): `splitOrp` then
+ * returns `["", word, ""]`, and the renderer must not paint that "pivot" red or put it in the 40 % column.
+ */
+export function hasPivot(word: string): boolean {
+  return !NO_PIVOT_SCRIPT.test(word);
+}
+
 /** Index of the pivot glyph in `word` as a UTF-16 offset (so `word.slice(i)` starts at the pivot). */
 export function orp(word: string): number {
   return pivotRange(word)[0];
@@ -495,6 +503,18 @@ export function orp(word: string): number {
 export function splitOrp(word: string): [string, string, string] {
   const [from, to] = pivotRange(word);
   return [word.slice(0, from), word.slice(from, to), word.slice(to)];
+}
+
+const CAPITAL = /\p{Lu}/gu;
+const FULL_WIDTH = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
+
+/**
+ * A rough width of `text` on one line, in lower-case characters: a capital counts 1.5 and a
+ * full-width character (CJK, Hangul) 1.8, which is how much wider they are in the UI fonts. The
+ * renderer passes it to the CSS, which shrinks the type until that many characters fit the stage.
+ */
+export function inkLength(text: string): number {
+  return text.length + 0.5 * (text.match(CAPITAL)?.length ?? 0) + 0.8 * (text.match(FULL_WIDTH)?.length ?? 0);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -511,9 +531,13 @@ function isNumberOrAcronym(text: string): boolean {
   return upper >= 2;
 }
 
-/** Milliseconds each token stays on screen, without the start-up ramp. */
-export function delays(tokens: Token[], t: Timing = DEFAULT_TIMING): number[] {
-  const base = 60_000 / Math.max(1, t.wpm);
+/**
+ * How many base words (one word = `60000 / wpm` ms) each token lasts: the long-word, number,
+ * clause, sentence and paragraph multipliers. Independent of `t.wpm`, and the expensive part (a
+ * grapheme segmenter per non-ASCII token), so compute it once per text and rescale with
+ * `delays`/`baseMs` when the speed changes.
+ */
+export function factors(tokens: Token[], t: Timing = DEFAULT_TIMING): number[] {
   return tokens.map((tok) => {
     let f = Math.min(t.longWordCap, 1 + t.longWord * Math.max(0, alnumCount(tok.text) - 6));
     if (isNumberOrAcronym(tok.text)) f *= t.numberFactor;
@@ -523,8 +547,17 @@ export function delays(tokens: Token[], t: Timing = DEFAULT_TIMING): number[] {
       if (kind === "sentence") f *= t.sentence;
       else if (kind === "clause") f *= t.clause;
     }
-    return base * f;
+    return f;
   });
+}
+
+/** Milliseconds a base word lasts at `wpm`. */
+export const baseMs = (wpm: number): number => 60_000 / Math.max(1, wpm);
+
+/** Milliseconds each token stays on screen, without the start-up ramp. */
+export function delays(tokens: Token[], t: Timing = DEFAULT_TIMING): number[] {
+  const base = baseMs(t.wpm);
+  return factors(tokens, t).map((f) => base * f);
 }
 
 /** Slow-down multiplier for the k-th word since a (re)start: `rampFrom` down to 1, linearly. */

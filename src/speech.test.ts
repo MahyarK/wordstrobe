@@ -295,3 +295,53 @@ test("Speaker: stop() while voices are loading means nothing is spoken", async (
   await pending;
   assert.equal(spoken.length, 0);
 });
+
+// The start watchdog (a voice that is listed but not installed accepts speak() and says nothing).
+function withTimers() {
+  const timers: (() => void)[] = [];
+  g.window = { setTimeout: (fn: () => void) => timers.push(fn) };
+  return timers;
+}
+
+test("Speaker: a silent voice is reported once the watchdog fires", async () => {
+  const { speaker, text, log } = setup(["One two three."]);
+  const timers = withTimers();
+  await speaker.start(text, 0, 200);
+  assert.equal(timers.length, 1);
+  timers[0]!();
+  assert.deepEqual(log.errors, ["The voice did not start"]);
+});
+
+test("Speaker: a voice that starts talking is not reported", async () => {
+  const { speaker, text, log } = setup(["One two three."]);
+  const timers = withTimers();
+  await speaker.start(text, 0, 200);
+  spoken[0]!.onstart?.();
+  timers[0]!();
+  assert.deepEqual(log.errors, []);
+});
+
+test("Speaker: the watchdog skips a paused speaker, and resume() arms it again for a voice that never started", async () => {
+  const { speaker, text, log } = setup(["One two three."]);
+  const timers = withTimers();
+  await speaker.start(text, 0, 200);
+  speaker.pause();
+  timers[0]!(); // fires while paused: nothing is wrong yet
+  assert.deepEqual(log.errors, []);
+  speaker.resume();
+  assert.equal(timers.length, 2, "re-armed on resume");
+  timers[1]!();
+  assert.deepEqual(log.errors, ["The voice did not start"]);
+});
+
+test("Speaker: resume() does not arm the watchdog once the voice has spoken", async () => {
+  const { speaker, text, log } = setup(["One two three."]);
+  const timers = withTimers();
+  await speaker.start(text, 0, 200);
+  boundary(spoken[0]!, 0);
+  speaker.pause();
+  speaker.resume();
+  assert.equal(timers.length, 1);
+  timers[0]!();
+  assert.deepEqual(log.errors, []);
+});

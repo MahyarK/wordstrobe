@@ -1,5 +1,6 @@
 /* Reader popup (PLAN §5.5, §8). No inline styles anywhere (CSP): JS only sets classes, data-*
-   attributes and the custom properties --fs (font size) and --p (progress). */
+   attributes and the custom properties --fs (font size), --p (progress) and --n (the width of the
+   chunk or whole word on screen in characters, see "the word"). */
 
 :root {
   color-scheme: light dark;
@@ -127,6 +128,15 @@ button {
   justify-content: center;
   gap: 10px;
   position: relative;
+  /* The type is sized from the stage (cqi, cqb), not from the window or from --fs alone, so the
+     biggest font setting still fits the smallest window. Size containment is safe here: the stage's
+     size comes from the flex layout around it, never from what is inside. */
+  container-type: size;
+  --room: 48px; /* what the sentence line below the word takes: #context (2.9em of 13px) + the gap */
+}
+
+#app[data-context="off"] #stage {
+  --room: 0px;
 }
 
 #stage > * {
@@ -137,10 +147,12 @@ button {
   display: flex;
 }
 
-#app[data-state="ready"] :is(#context, #dot),
-#app[data-state="playing"] #context,
-#app[data-state="paused"] #context {
+#app[data-state="ready"] #dot {
   display: block;
+}
+
+#app:is([data-state="ready"], [data-state="playing"], [data-state="paused"]) #context {
+  display: -webkit-box; /* for the two-line clamp */
 }
 
 #app:is([data-state="ready"], [data-state="playing"], [data-state="paused"]):not([data-chunk]) #word {
@@ -169,11 +181,15 @@ button {
 
 /* ---- the word ----------------------------------------------------------------------------- */
 
-/* Pivot column at 40 % of the width. The left part is right-aligned, so it grows leftwards. */
+/* Pivot column at 40 % of the width. The left part is right-aligned, so it grows leftwards.
+   The font is the setting, shrunk to what the stage allows:
+   - 12cqi: the widest word the tokenizer produces (13 letters, pivot on the 4th) has up to 9
+     letters right of the pivot, which have 60 % of the width minus half the pivot to themselves;
+   - the height: a line (1.25) and the two 7 px ticks, above the --room that the sentence keeps. */
 #word {
   grid-template-columns: minmax(0, 2fr) auto minmax(0, 3fr);
   align-items: center;
-  font-size: var(--fs, 44px);
+  font-size: max(12px, min(var(--fs, 44px), 10cqi, calc((100cqb - var(--room) - 14px) / 1.25)));
   line-height: 1.25;
   font-weight: 500;
   white-space: pre;
@@ -213,17 +229,43 @@ button {
   grid-row: 3;
 }
 
+/* No pivot (right-to-left and Indic scripts, PLAN §5.2): the whole word, in the text colour,
+   centred, without ticks. Its width is its length (--n), so it shrinks to fit instead of running
+   off one side. */
+#word[data-nopivot] {
+  grid-template-columns: minmax(0, 1fr);
+  font-size: max(12px, min(var(--fs, 44px), calc(100cqi / (var(--n, 1) * 0.6)), calc((100cqb - var(--room)) / 1.25)));
+}
+
+#word[data-nopivot] .pivot {
+  grid-area: 2 / 1;
+  justify-self: center;
+  color: inherit;
+  font-weight: inherit;
+}
+
+#word[data-nopivot] :is(.l, .r, .tick) {
+  display: none;
+}
+
+/* A chunk is centred text on one line: the font shrinks with its length (0.56 em per character
+   covers three average words; --n comes from the renderer) rather than wrapping and clipping. */
 #chunk {
   padding: 0 6px;
-  font-size: calc(var(--fs, 44px) * 0.8);
+  font-size: max(12px, min(calc(var(--fs, 44px) * 0.8), calc((100cqi - 12px) / (var(--n, 1) * 0.56)), calc((100cqb - var(--room)) / 1.25)));
   line-height: 1.25;
   font-weight: 500;
   text-align: center;
-  text-wrap: balance;
+  white-space: nowrap;
 }
 
-/* Reserved even while empty, so the word never moves when the sentence fades in. */
+/* Reserved even while empty, so the word never moves when the sentence fades in. Two lines at
+   most (the --room of the stage): a longer sentence in a narrow window is cut with an ellipsis,
+   not spilled over the footer. */
 #context {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   min-height: 2.9em;
   margin: 0;
   padding: 0 6px;

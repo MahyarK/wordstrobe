@@ -1,5 +1,6 @@
 // Read aloud on the Web Speech API (PLAN §6): per-paragraph utterances, word boundaries mapped
 // back to tokens, and a voice speed that calibrates itself while it speaks.
+import { BASE_WPM } from "./prefs.ts";
 import { tokenAtChar, type Token } from "./text.ts";
 
 /** Words per minute a voice speaks at rate 1, until it has been measured. */
@@ -155,6 +156,9 @@ export class Speaker {
   private calibrated = false;
   private paused = false;
   private sample: { n: number; t0: number; last: number } | undefined;
+  private watchdog = 0;
+  /** Arms the start watchdog again for the current utterance, if it has not said a word yet (see resume()). */
+  private rearm: (() => void) | undefined;
   /** Bumped by every start/stop; events of an older generation are stale (cancel() delivers them late). */
   private gen = 0;
 
@@ -207,6 +211,7 @@ export class Speaker {
     if (!this.supported) return;
     this.paused = false;
     speechSynthesis.resume();
+    this.rearm?.(); // the watchdog skips a paused speaker, so it may have lapsed meanwhile
   }
 
   stop(): void {
@@ -216,6 +221,8 @@ export class Speaker {
 
   private halt(): number {
     this.commit();
+    clearTimeout(this.watchdog);
+    this.rearm = undefined;
     if (this.supported) {
       speechSynthesis.cancel();
       if (speechSynthesis.paused) speechSynthesis.resume(); // cancel() leaves a paused synth paused
@@ -239,15 +246,29 @@ export class Speaker {
     if (this.voice) u.voice = this.voice;
     u.lang = this.voice?.lang ?? text.lang;
     u.rate = this.rate;
-    const watchdog = window.setTimeout(() => {
-      if (gen !== this.gen || this.paused) return;
-      this.stop();
-      this.hooks.error("The voice did not start");
-    }, START_TIMEOUT_MS);
-    u.onstart = () => clearTimeout(watchdog);
+    let started = false;
+    const arm = () => {
+      clearTimeout(this.watchdog);
+      this.watchdog = window.setTimeout(() => {
+        if (gen !== this.gen || started || this.paused) return; // resume() arms it again
+        this.stop();
+        this.hooks.error("The voice did not start");
+      }, START_TIMEOUT_MS);
+    };
+    const heard = () => {
+      started = true;
+      clearTimeout(this.watchdog);
+    };
+    this.rearm = () => {
+      if (!started) arm();
+    };
+    arm();
+    u.onstart = () => {
+      if (gen === this.gen) heard();
+    };
     let lastChar = -1;
     u.onboundary = (e) => {
-      clearTimeout(watchdog);
+      if (gen === this.gen) heard();
       if (gen !== this.gen || e.name !== "word") return;
       // WKWebView sometimes delivers the last event of a cancelled utterance to the next one (seen
       // in Japanese after a restart): its offset is past the end of the new text or goes backwards.
@@ -258,14 +279,15 @@ export class Speaker {
       this.observe(token);
     };
     u.onend = () => {
-      clearTimeout(watchdog);
       if (gen !== this.gen) return;
+      heard();
       this.commit();
       this.speak(para + 1, 0, gen);
     };
     u.onerror = (e) => {
-      clearTimeout(watchdog);
-      if (gen !== this.gen || e.error === "canceled" || e.error === "interrupted") return;
+      if (gen !== this.gen) return;
+      heard();
+      if (e.error === "canceled" || e.error === "interrupted") return;
       this.hooks.error(`Speech failed (${e.error})`);
     };
     speechSynthesis.speak(u);
@@ -293,7 +315,7 @@ export class Speaker {
     const s = this.sample;
     this.sample = undefined;
     if (!s || s.n < MIN_SAMPLE_WORDS || s.last - s.t0 < MIN_SAMPLE_MS) return;
-    const estimate = Math.min(600, Math.max(60, ((s.n - 1) * 60_000) / (s.last - s.t0) / speedAt(this.rate)));
+    const estimate = Math.min(BASE_WPM.max, Math.max(BASE_WPM.min, ((s.n - 1) * 60_000) / (s.last - s.t0) / speedAt(this.rate)));
     this.baseWpm = this.calibrated ? this.baseWpm * (1 - SMOOTHING) + estimate * SMOOTHING : estimate;
     this.calibrated = true;
     this.baseWpms[this.key] = Math.round(this.baseWpm);

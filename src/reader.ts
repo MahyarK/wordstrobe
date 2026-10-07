@@ -6,10 +6,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { Player } from "./player.ts";
-import { Speaker, langPrefix } from "./speech.ts";
+import { DEFAULTS, LIMITS, normalize, readPrefs, type Prefs } from "./prefs.ts";
+import { Speaker } from "./speech.ts";
 import {
   DEFAULT_TIMING,
+  factors,
   frames,
+  hasPivot,
+  inkLength,
   sentenceStartBefore,
   splitOrp,
   tokenize,
@@ -23,37 +27,9 @@ type Load = OcrResult & { ms?: number; tables?: number; source?: string };
 type State = "loading" | "ready" | "playing" | "paused" | "done" | "empty" | "error";
 type View = "rsvp" | "text";
 
-type Settings = {
-  wpm: number;
-  wordsPerFlash: number;
-  fontSize: number;
-  theme: "system" | "light" | "dark";
-  startDelay: number;
-  smartResume: boolean;
-  contextLine: boolean;
-  readAloud: boolean;
-  voiceMode: "along" | "voice";
-  voices: Record<string, string>;
-  voiceBaseWpm: Record<string, number>;
-};
+type Settings = Prefs;
 
-const DEFAULTS: Settings = {
-  wpm: 350,
-  wordsPerFlash: 1,
-  fontSize: 44,
-  theme: "system",
-  startDelay: 600,
-  smartResume: true,
-  contextLine: true,
-  readAloud: false,
-  voiceMode: "along",
-  voices: {},
-  voiceBaseWpm: {},
-};
-
-const WPM_STEP = 25;
-const WPM_MIN = 100;
-const WPM_MAX = 1200;
+const { min: WPM_MIN, max: WPM_MAX, step: WPM_STEP } = LIMITS.wpm;
 const AVERAGE_WPM = 238; // the "saved vs" reference on the done screen
 
 // Demo mode (plain browser via `npm run dev`): no IPC, no store, a built-in sample after 300 ms.
@@ -76,6 +52,7 @@ const store = TAURI ? new LazyStore("settings.json") : undefined;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const app = $("app");
 const stage = $("stage");
+const wordEl = $("word");
 const wordL = document.querySelector<HTMLElement>("#word .l")!;
 const wordP = document.querySelector<HTMLElement>("#word .pivot")!;
 const wordR = document.querySelector<HTMLElement>("#word .r")!;
@@ -96,12 +73,13 @@ const mark = document.createElement("mark");
 
 let state: State = "loading";
 let view: View = "rsvp";
-let settings: Settings = DEFAULTS;
+let settings: Settings = normalize();
 let session = 0; // bumped by every load/status/close, so stale async work can tell it is stale
 let dismissed = false; // closed with Esc while OCR was still running: the result must not play into a hidden window
 
 let paragraphs: string[] = [];
 let tokens: Token[] = [];
+let tokenFactors: number[] = []; // per-token duration multipliers: the same for every Player of this text, whatever the wpm and chunk size
 let lang = "en";
 let player: Player | undefined;
 let chunk = 1;
@@ -136,6 +114,7 @@ const speaker = new Speaker({
   },
   error(message) {
     speechLive = false;
+    cancelSpeechRestart();
     setSpeech(false);
     toast(message);
     if (state === "playing" && player) {
@@ -189,6 +168,7 @@ async function onLoad(payload: Load): Promise<void> {
   lang = payload.lang || "en";
   paragraphs = toParagraphs(payload);
   tokens = tokenize(paragraphs, lang);
+  tokenFactors = factors(tokens, DEFAULT_TIMING);
   if (tokens.length === 0) {
     showMessage("empty", "No text found");
     closeTimer = window.setTimeout(close, 1500);
@@ -212,31 +192,16 @@ async function onLoad(payload: Load): Promise<void> {
 }
 
 async function readSettings(): Promise<Settings> {
-  const out: Record<string, unknown> = { ...DEFAULTS };
-  if (store) {
-    await Promise.all(
-      Object.keys(DEFAULTS).map(async (key) => {
-        const v = await store.get(key).catch(() => undefined);
-        if (v !== undefined && v !== null && typeof v === typeof out[key]) out[key] = v;
-      }),
-    );
-  } else {
-    // Demo only: reader.html?wpm=900&startDelay=0&theme=dark&readAloud=1
-    for (const [key, v] of new URLSearchParams(location.search)) {
-      if (!(key in DEFAULTS)) continue;
-      const kind = typeof out[key];
-      out[key] = kind === "number" ? Number(v) : kind === "boolean" ? v !== "0" && v !== "false" : v;
-    }
+  if (store) return readPrefs((key) => store.get(key).catch(() => undefined));
+  // Demo only: reader.html?wpm=900&startDelay=0&theme=dark&readAloud=1
+  const raw: Record<string, unknown> = {};
+  for (const [key, v] of new URLSearchParams(location.search)) {
+    const kind = typeof (DEFAULTS as Record<string, unknown>)[key];
+    if (kind === "number") raw[key] = Number(v);
+    else if (kind === "boolean") raw[key] = v !== "0" && v !== "false";
+    else if (kind === "string") raw[key] = v;
   }
-  const s = out as Settings;
-  const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(n) ? n : lo));
-  s.wpm = clamp(s.wpm, WPM_MIN, WPM_MAX);
-  s.wordsPerFlash = Math.round(clamp(s.wordsPerFlash, 1, 3));
-  s.fontSize = clamp(s.fontSize, 16, 120);
-  s.startDelay = clamp(s.startDelay, 0, 5000);
-  if (!["system", "light", "dark"].includes(s.theme)) s.theme = "system";
-  if (s.voiceMode !== "voice") s.voiceMode = "along";
-  return s;
+  return normalize(raw);
 }
 
 function applyAppearance(): void {
@@ -276,6 +241,7 @@ function setState(next: State): void {
 function reset(): void {
   player = undefined;
   tokens = [];
+  tokenFactors = [];
   paragraphs = [];
   shown = -1;
   playedMs = 0;
@@ -309,20 +275,32 @@ function makePlayer(n: number, wpm: number): Player {
   return new Player(tokens, frames(tokens, n), {
     timing: { ...DEFAULT_TIMING, wpm },
     smartResume: settings.smartResume,
+    factors: tokenFactors,
   });
 }
 
-/** Three textContent writes per word (one in chunk mode), no measuring. */
+/**
+ * Three textContent writes per word (one in chunk mode), no measuring. A chunk, or a word shown
+ * whole (no pivot), is as wide as its text: `--n`, its rough width in characters, lets the CSS
+ * shrink the font so that it fits on one line instead of wrapping or running off the stage.
+ */
 function renderFrame(f: number): void {
   const p = player!;
   shown = f;
   const idx = p.frames[f]!;
-  if (chunk > 1) chunkEl.textContent = idx.map((i) => tokens[i]!.text).join(" ");
-  else {
-    const [l, pivot, r] = splitOrp(tokens[idx[0]!]!.text);
+  if (chunk > 1) {
+    const text = idx.map((i) => tokens[i]!.text).join(" ");
+    chunkEl.textContent = text;
+    chunkEl.style.setProperty("--n", String(inkLength(text)));
+  } else {
+    const text = tokens[idx[0]!]!.text;
+    const [l, pivot, r] = splitOrp(text);
     wordL.textContent = l;
     wordP.textContent = pivot;
     wordR.textContent = r;
+    const whole = !hasPivot(text);
+    wordEl.toggleAttribute("data-nopivot", whole);
+    if (whole) wordEl.style.setProperty("--n", String(inkLength(text)));
   }
   if (view === "text") highlight(idx, "nearest");
   if (state === "paused") renderContext(idx);
@@ -419,6 +397,7 @@ function buildText(): void {
       at = 0;
       prev = undefined;
       p = root.appendChild(document.createElement("p"));
+      p.dir = "auto"; // Arabic and Hebrew paragraphs read right to left
     }
     if (prev && prev.start === t.start) {
       spans[i] = spans[i - 1]!;
@@ -480,7 +459,7 @@ function play(): void {
     }
     p.seek(from, now);
     renderFrame(from);
-    speakFrom(from);
+    speakFrom();
   } else {
     p.play(now);
     if (p.frame !== shown) renderFrame(p.frame); // smart resume may have rewound
@@ -494,6 +473,7 @@ function pause(): void {
   if (!p || state !== "playing") return;
   cancelAnimationFrame(raf);
   raf = 0;
+  cancelSpeechRestart(); // a restart still pending would speak into the pause
   if (speechOn) {
     speaker.pause();
     speechRewind = true;
@@ -510,6 +490,7 @@ function togglePlay(): void {
 function finish(): void {
   cancelAnimationFrame(raf);
   raf = 0;
+  cancelSpeechRestart();
   speechLive = false;
   setState("done");
 }
@@ -517,7 +498,7 @@ function finish(): void {
 function stopAll(): void {
   clearTimeout(startTimer);
   clearTimeout(closeTimer);
-  clearTimeout(speechTimer);
+  cancelSpeechRestart();
   cancelAnimationFrame(raf);
   raf = 0;
   speaker.stop();
@@ -546,8 +527,7 @@ function seek(frame: number): void {
     // Speech cannot jump: drop it, and start again from the new word once the user stops scrubbing.
     speaker.stop();
     speechLive = false;
-    clearTimeout(speechTimer);
-    if (state === "playing") speechTimer = window.setTimeout(() => speakFrom(p.frame), 180);
+    restartSpeechSoon(180);
   }
 }
 
@@ -570,14 +550,14 @@ function setWpm(wpm: number): void {
     // The rate of a running utterance cannot change: restart it at the same word with the new one.
     speaker.stop();
     speechLive = false;
-    clearTimeout(speechTimer);
-    if (state === "playing") speechTimer = window.setTimeout(() => speakFrom(p.frame), 250);
+    restartSpeechSoon(250);
   }
 }
 
 function setChunk(n: number): void {
   const p = player;
   if (!p || n === chunk) return;
+  // A speech restart that is pending (after a seek) stays armed: it looks at `player` when it fires.
   const token = p.frames[p.frame]![0]!;
   const wasPlaying = p.playing;
   const now = performance.now();
@@ -604,12 +584,34 @@ function setSpeech(on: boolean): void {
   speakBtn.setAttribute("aria-pressed", String(on));
 }
 
-function speakFrom(frame: number): void {
+/** Starts the voice at the frame on screen (its first word), at the current speed. */
+function speakFrom(): void {
   const p = player;
   if (!p) return;
-  clearTimeout(speechTimer);
+  cancelSpeechRestart();
   speechLive = true;
-  void speaker.start({ paragraphs, tokens, lang }, p.frames[frame]![0]!, p.wpm);
+  void speaker.start({ paragraphs, tokens, lang }, p.frames[p.frame]![0]!, p.wpm);
+}
+
+/**
+ * The voice cannot change position or speed in place, so after a seek or a speed change it is
+ * restarted from the frame on screen once the user pauses for `ms`. One handle for all of it: the
+ * timer is cancelled by everything that takes the voice or the playback out of the picture, and
+ * when it fires it looks at the *current* player and state, never at what was true when it was set
+ * (the chunk size, and with it the whole frame layout, may have changed meanwhile).
+ */
+function restartSpeechSoon(ms: number): void {
+  cancelSpeechRestart();
+  if (state !== "playing") return;
+  speechTimer = window.setTimeout(() => {
+    speechTimer = 0;
+    if (player && state === "playing" && speechOn && !document.hidden) speakFrom();
+  }, ms);
+}
+
+function cancelSpeechRestart(): void {
+  clearTimeout(speechTimer);
+  speechTimer = 0;
 }
 
 /** The voice drives the display: show the frame that holds the spoken word, right in the event. */
@@ -627,6 +629,7 @@ function toggleSpeech(): void {
   if (!p) return;
   if (!speaker.supported) return toast("Read aloud is not available here");
   const now = performance.now();
+  cancelSpeechRestart();
   if (speechOn) {
     speaker.stop();
     speechLive = false;
@@ -643,7 +646,7 @@ function toggleSpeech(): void {
       cancelAnimationFrame(raf);
       raf = 0;
       p.pause(now, false);
-      speakFrom(p.frame);
+      speakFrom();
     }
   }
   updateStats();
@@ -676,10 +679,27 @@ async function copyAll(): Promise<void> {
 // Input
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * The Latin letter or digit a key stands for. The printed one when it is Latin; otherwise (Cyrillic,
+ * Greek, Arabic, Hebrew layouts, AZERTY's unshifted digit row) the physical key's name, so that S, T,
+ * R and 1-3 work wherever the key sits on a QWERTY keyboard. Dvorak and the like keep what is printed.
+ */
+function keyName(e: KeyboardEvent): string {
+  if (/^[a-z0-9]$/i.test(e.key)) return e.key.toLowerCase();
+  if (e.altKey || e.shiftKey) return e.key; // "ß", "!": what these typed, not a letter or a digit
+  const physical = /^(?:Key([A-Z])|Digit(\d))$/.exec(e.code);
+  return physical ? (physical[1] ?? physical[2]!).toLowerCase() : e.key;
+}
+
+function openSettings(): void {
+  pause(); // like the button: the window that opens must not be read to
+  call("open_settings");
+}
+
 function onKey(e: KeyboardEvent): void {
   if (e.metaKey) {
-    if (e.key === ",") call("open_settings");
-    else if (e.key.toLowerCase() === "c") void copyAll();
+    if (e.key === "," || e.code === "Comma") openSettings();
+    else if (keyName(e) === "c") void copyAll();
     else return;
     e.preventDefault();
     return;
@@ -689,7 +709,8 @@ function onKey(e: KeyboardEvent): void {
   const p = player;
   if (!p || state === "loading" || state === "error" || state === "empty") return;
 
-  switch (e.key) {
+  const key = keyName(e); // " " and the arrows are not letters: they come back as e.key
+  switch (key) {
     case " ":
       if (!e.repeat) togglePlay();
       break;
@@ -706,13 +727,13 @@ function onKey(e: KeyboardEvent): void {
     case "1":
     case "2":
     case "3":
-      if (!e.repeat) setChunk(Number(e.key));
+      if (!e.repeat) setChunk(Number(key));
       break;
     default:
       if (e.altKey || e.repeat) return;
-      if (e.key.toLowerCase() === "s") toggleSpeech();
-      else if (e.key.toLowerCase() === "t") setView(view === "text" ? "rsvp" : "text");
-      else if (e.key.toLowerCase() === "r") restart();
+      if (key === "s") toggleSpeech();
+      else if (key === "t") setView(view === "text" ? "rsvp" : "text");
+      else if (key === "r") restart();
       else return;
   }
   e.preventDefault();
@@ -734,6 +755,26 @@ addEventListener(
   },
   { passive: false },
 );
+
+// Tauri's drag.js (injected for data-tauri-drag-region) turns a double press on a drag region into
+// "toggle maximize": on mousedown elsewhere, on mouseup on macOS. A popup that maximizes is not
+// wanted, and this window has no permission for it anyway, so the call would only be rejected.
+// Those two events never get past the capture phase: drag.js listens on `document`, below this.
+// Single presses, which start the drag, are left alone. So is everything drag.js ignores already:
+// buttons (their own mousedown handler keeps them from taking focus) and the opted-out regions
+// (the stage and the text view).
+for (const type of ["mousedown", "mouseup"]) {
+  addEventListener(
+    type,
+    (e) => {
+      if ((e as MouseEvent).detail < 2 || !(e.target instanceof Element)) return;
+      // null = a button without the attribute, undefined = nothing: neither is a drag region
+      const region = e.target.closest("button, [data-tauri-drag-region]")?.getAttribute("data-tauri-drag-region");
+      if (region != null && region !== "false") e.stopImmediatePropagation();
+    },
+    true,
+  );
+}
 
 // The stage is both "click toggles play" and "drag moves the window". data-tauri-drag-region
 // cannot do both (it starts a native drag on mousedown, so the click never arrives), which is
@@ -769,10 +810,7 @@ textEl.addEventListener("click", (e) => {
 // Buttons never take focus, so Space and the arrows always reach the document.
 document.querySelectorAll("button").forEach((b) => b.addEventListener("mousedown", (e) => e.preventDefault()));
 speakBtn.addEventListener("click", toggleSpeech);
-$("btn-settings").addEventListener("click", () => {
-  pause();
-  call("open_settings");
-});
+$("btn-settings").addEventListener("click", openSettings);
 $("btn-close").addEventListener("click", close);
 $("replay").addEventListener("click", restart);
 $("copy").addEventListener("click", () => void copyAll());
@@ -792,4 +830,13 @@ function fail(message: string): void {
   showMessage("error", message);
 }
 addEventListener("error", (e) => fail(e.message));
-addEventListener("unhandledrejection", (e) => fail(String(e.reason?.message ?? e.reason)));
+addEventListener("unhandledrejection", (e) => {
+  const message = String(e.reason?.message ?? e.reason);
+  // Tauri's IPC refuses a command this window has no permission for ("... not allowed. Permissions
+  // associated with this command: ..." / "... not allowed by ACL"). That is a missing capability,
+  // never a reason to stop the text that is being read.
+  if (/\bnot allowed\b/i.test(message)) {
+    e.preventDefault();
+    console.warn(message);
+  } else fail(message);
+});

@@ -1,24 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "reader",
-  "description": "Reader popup: receive events from Rust, drag/hide/theme itself, read settings and write wpm and voice speeds. No shell, no clipboard plugin (the webview's own clipboard API is used).",
+  "description": "Reader popup: receive events from Rust, drag and theme itself, read settings and write wpm and voice speeds (the store autosaves). It cannot hide, resize or maximize itself: Esc goes through the close_reader command, and Rust sizes the window. No shell, no clipboard plugin (the webview's own clipboard API is used).",
   "windows": ["reader"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "core:window:allow-hide",
     "core:window:allow-start-dragging",
-    "core:window:allow-set-size",
     "core:window:allow-set-theme",
     "store:allow-load",
-    "store:allow-get-store",
     "store:allow-get",
-    "store:allow-has",
-    "store:allow-keys",
-    "store:allow-values",
-    "store:allow-entries",
-    "store:allow-length",
-    "store:allow-set",
-    "store:allow-save"
+    "store:allow-set"
   ]
 }

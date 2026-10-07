@@ -6,7 +6,10 @@ import {
   DEFAULT_TIMING,
   cleanup,
   delays,
+  factors,
   frames,
+  hasPivot,
+  inkLength,
   orp,
   rampFactor,
   sentenceStartBefore,
@@ -153,6 +156,25 @@ test("orp: Devanagari and other Indic scripts with conjuncts get no pivot", () =
   }
 });
 
+test("hasPivot: false exactly for the words splitOrp returns whole (RTL and Indic), true for the rest", () => {
+  for (const w of [ARABIC, "مرحبا،", HEBREW, DEVANAGARI, "নমস্কার", "iPhoneمرحبا", "ا"]) assert.equal(hasPivot(w), false, w);
+  for (const w of ["Wordstrobe", "Привет", "αβγδε", "안녕하세요", "你好", "สวัสดี", "—", "😀", "a", ""]) assert.equal(hasPivot(w), true, w);
+  // the contract the renderer relies on: no pivot <=> the whole word comes back in the middle part
+  for (const w of [ARABIC, HEBREW, DEVANAGARI]) assert.deepEqual(splitOrp(w), ["", w, ""]);
+  for (const w of ["Wordstrobe", "e.g.", "你好", "Привет"]) assert.ok(splitOrp(w)[1].length < w.length, w);
+});
+
+test("inkLength: characters, with capitals and full-width characters counting for more", () => {
+  assert.equal(inkLength(""), 0);
+  assert.equal(inkLength("the cat sat"), 11);
+  assert.equal(inkLength("USA"), 4.5);
+  assert.equal(inkLength("Word"), 4.5);
+  assert.equal(inkLength("你好 世界"), 5 + 0.8 * 4);
+  assert.equal(inkLength("안녕"), 2 + 0.8 * 2);
+  assert.equal(inkLength("\u{20000}"), 2 + 0.8); // an astral Han character is two UTF-16 units: over-counted, which only shrinks the font a little more
+  assert.ok(inkLength("INTERNATIONAL") > 1.4 * inkLength("international"));
+});
+
 test("orp: scripts that split safely keep their pivot (Latin, Greek, Cyrillic, CJK, Korean, Thai)", () => {
   assert.deepEqual(splitOrp("Привет"), ["Пр", "и", "вет"]);
   assert.deepEqual(splitOrp("αβγδε"), ["α", "β", "γδε"]);
@@ -192,6 +214,16 @@ test("delays: plain words use the base interval", () => {
   assert.deepEqual(delays([tok("alpha"), tok("a"), tok("reader")], at300), [200, 200, 200]);
   approx(delays([tok("alpha")])[0]!, 60000 / 350);
   assert.deepEqual(delays([]), []);
+});
+
+test("factors are independent of wpm, and delays is exactly factors x the base interval", () => {
+  const tokens = tokenize(["Rapid serial visual presentation, or RSVP, shows 3.14 words. Überraschungsmomente!", "Next paragraph."], "en");
+  const f = factors(tokens, at300);
+  assert.deepEqual(factors(tokens, { ...at300, wpm: 900 }), f);
+  assert.ok(f.some((x) => x > 1) && f.some((x) => x === 1));
+  for (const wpm of [100, 300, 1200]) {
+    assert.deepEqual(delays(tokens, { ...at300, wpm }), f.map((x) => (60_000 / wpm) * x));
+  }
 });
 
 test("delays: long words stretch by 4 % per letter over 6, capped at 1.5", () => {

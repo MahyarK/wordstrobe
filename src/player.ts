@@ -8,7 +8,8 @@
 // there is no drift however irregular the ticks are.
 import {
   DEFAULT_TIMING,
-  delays,
+  baseMs,
+  factors,
   rampFactor,
   sentenceStartBefore,
   type Timing,
@@ -21,11 +22,21 @@ import {
  */
 const STALL_MS = 250;
 
-export type PlayerOptions = { timing?: Timing; smartResume?: boolean };
+export type PlayerOptions = {
+  timing?: Timing;
+  smartResume?: boolean;
+  /**
+   * `factors(tokens, timing)` computed earlier: a Player for the same tokens and multipliers (a
+   * new chunk size, say) then skips that work. Only `timing.wpm` may differ.
+   */
+  factors?: number[];
+};
 
 export class Player {
   readonly tokens: Token[];
   readonly frames: number[][];
+  /** Per-token duration multipliers (wpm-independent), computed once. Hand them to the next Player of the same text. */
+  readonly factors: number[];
   smartResume: boolean;
   /** Index of the frame that is on screen. */
   frame = 0;
@@ -48,6 +59,7 @@ export class Player {
     this.frames = frames;
     this.timing = opts.timing ?? DEFAULT_TIMING;
     this.smartResume = opts.smartResume ?? true;
+    this.factors = opts.factors ?? factors(tokens, this.timing);
     frames.forEach((f, i) => f.forEach((t) => (this.tokenFrame[t] = i)));
     this.rebuild();
   }
@@ -177,7 +189,8 @@ export class Player {
   }
 
   private rebuild(): void {
-    this.tokenDelay = delays(this.tokens, this.timing);
+    const base = baseMs(this.timing.wpm);
+    this.tokenDelay = this.factors.map((f) => base * f);
     this.cum = [0];
     this.frames.forEach((f, i) => {
       this.cum.push(this.cum[i]! + f.reduce((sum, t) => sum + this.tokenDelay[t]!, 0));
