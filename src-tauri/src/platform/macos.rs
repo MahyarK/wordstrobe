@@ -6,21 +6,28 @@ use std::{
     path::Path,
     process::Command,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         mpsc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::{json, Value};
-use tauri::{async_runtime::Receiver, AppHandle, Manager};
+use tauri::{async_runtime::Receiver, AppHandle, Manager, WebviewWindow};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
 
-const OCR_TIMEOUT: Duration = Duration::from_secs(10);
-const RESPAWN_DELAY: Duration = Duration::from_secs(1);
+/// Generous on purpose: a full-screen capture of a 5K display takes 3-4 s on an M3 Pro and slower or
+/// Intel Macs need longer. A timeout kills the helper, which then has to cold-start again.
+const OCR_TIMEOUT: Duration = Duration::from_secs(30);
+/// Delay before respawning a helper that exited: doubles with every exit that was not preceded by
+/// healthy service, up to the cap.
+const RESPAWN_MIN: Duration = Duration::from_secs(1);
+const RESPAWN_MAX: Duration = Duration::from_secs(60);
+/// A helper that has been ready this long counts as healthy even if nobody asked it anything.
+const STABLE_AFTER: Duration = Duration::from_secs(30);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -53,33 +60,99 @@ pub fn capture_region(path: &Path) -> Result<bool, String> {
     Ok(path.exists())
 }
 
+/// Shows the reader over full-screen apps too (PLAN §8): `FullScreenAuxiliary` next to the
+/// `CanJoinAllSpaces` that `visibleOnAllWorkspaces` already set. Main thread only (setup).
+pub fn show_over_fullscreen(window: &WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior as Behavior};
+    let Ok(ptr) = window.ns_window() else {
+        eprintln!("wordstrobe: reader has no NSWindow");
+        return;
+    };
+    // SAFETY: tao owns this live NSWindow for as long as the window exists, and we are on the main thread.
+    let ns_window = unsafe { &*ptr.cast::<NSWindow>() };
+    ns_window.setCollectionBehavior(ns_window.collectionBehavior() | Behavior::FullScreenAuxiliary);
+    let now = ns_window.collectionBehavior();
+    eprintln!(
+        "wordstrobe: reader collection behavior {:#x} (all spaces: {}, full-screen auxiliary: {})",
+        now.0,
+        now.contains(Behavior::CanJoinAllSpaces),
+        now.contains(Behavior::FullScreenAuxiliary)
+    );
+}
+
 type Reply = Result<Value, String>;
 
 /// Managed state: the helper process and the requests waiting for an answer.
 #[derive(Default)]
 pub struct Ocr {
     child: Mutex<Option<CommandChild>>,
+    /// Pid of `child` (0 = none), set together with it. Cached because `CommandChild::pid` (like
+    /// `kill`) locks inside `shared_child`, which blocks for as long as a stopped helper is waited on.
+    pid: AtomicU32,
     pending: Mutex<HashMap<u64, mpsc::Sender<Reply>>>,
     next_id: AtomicU64,
+    /// When the current helper said it was ready, and whether it has answered a request since.
+    /// Both feed the respawn backoff.
+    ready_at: Mutex<Option<Instant>>,
+    answered: AtomicBool,
+}
+
+impl Ocr {
+    fn set_child(&self, child: Option<CommandChild>) {
+        let mut slot = self.child.lock().unwrap();
+        // First time `pid()` is asked: right after the spawn nothing waits on the child with the lock held yet.
+        self.pid.store(
+            child.as_ref().map_or(0, CommandChild::pid),
+            Ordering::Release,
+        );
+        *slot = child;
+    }
+}
+
+/// Respawn delay: starts at `RESPAWN_MIN`, doubles per helper exit up to `RESPAWN_MAX`, and starts
+/// over after a helper that served well.
+struct Backoff(Duration);
+
+impl Backoff {
+    fn new() -> Self {
+        Backoff(RESPAWN_MIN)
+    }
+
+    fn next(&mut self, healthy: bool) -> Duration {
+        if healthy {
+            self.0 = RESPAWN_MIN;
+        }
+        let delay = self.0;
+        self.0 = (self.0 * 2).min(RESPAWN_MAX);
+        delay
+    }
 }
 
 /// Spawns the helper now and keeps it alive: when it exits, pending requests fail and it is
-/// respawned after a second. Requires `app.manage(Ocr::default())` first.
+/// respawned after a delay that grows while it keeps dying. Requires `app.manage(Ocr::default())` first.
 pub fn start_helper(app: &AppHandle) {
     let app = app.clone();
     // Spawned here, not in the thread, so `child` is set before the first request can be sent.
     let mut rx = spawn_helper(&app);
-    std::thread::spawn(move || loop {
-        if let Some(rx) = rx.take() {
-            tauri::async_runtime::block_on(pump(&app, rx));
+    std::thread::spawn(move || {
+        let mut backoff = Backoff::new();
+        loop {
+            if let Some(rx) = rx.take() {
+                tauri::async_runtime::block_on(pump(&app, rx));
+            }
+            let ocr = app.state::<Ocr>();
+            ocr.set_child(None);
+            for (_, tx) in ocr.pending.lock().unwrap().drain() {
+                let _ = tx.send(Err("OCR helper exited".into()));
+            }
+            let ready_for = ocr.ready_at.lock().unwrap().take().map(|t| t.elapsed());
+            let answered = ocr.answered.swap(false, Ordering::AcqRel);
+            let healthy = answered || ready_for.is_some_and(|d| d >= STABLE_AFTER);
+            let delay = backoff.next(healthy);
+            eprintln!("wordstrobe: respawning OCR helper in {} s", delay.as_secs());
+            std::thread::sleep(delay);
+            rx = spawn_helper(&app);
         }
-        let ocr = app.state::<Ocr>();
-        *ocr.child.lock().unwrap() = None;
-        for (_, tx) in ocr.pending.lock().unwrap().drain() {
-            let _ = tx.send(Err("OCR helper exited".into()));
-        }
-        std::thread::sleep(RESPAWN_DELAY);
-        rx = spawn_helper(&app);
     });
 }
 
@@ -92,7 +165,7 @@ fn spawn_helper(app: &AppHandle) -> Option<Receiver<CommandEvent>> {
         .and_then(|cmd| cmd.spawn());
     match spawned {
         Ok((rx, child)) => {
-            *app.state::<Ocr>().child.lock().unwrap() = Some(child);
+            app.state::<Ocr>().set_child(Some(child));
             Some(rx)
         }
         Err(e) => {
@@ -117,7 +190,10 @@ async fn pump(app: &AppHandle, mut rx: Receiver<CommandEvent>) {
             CommandEvent::Stderr(chunk) => eprint!("{}", String::from_utf8_lossy(&chunk)),
             CommandEvent::Error(e) => eprintln!("wordstrobe: OCR helper error: {e}"),
             CommandEvent::Terminated(p) => {
-                eprintln!("wordstrobe: OCR helper terminated (code {:?})", p.code);
+                eprintln!(
+                    "wordstrobe: OCR helper terminated (code {:?}, signal {:?})",
+                    p.code, p.signal
+                );
                 return;
             }
             _ => {}
@@ -136,8 +212,10 @@ fn handle_line(app: &AppHandle, line: &[u8]) {
         );
         return;
     };
+    let state = app.state::<Ocr>();
     if value.get("ready").is_some() {
         eprintln!("wordstrobe: OCR helper ready");
+        *state.ready_at.lock().unwrap() = Some(Instant::now());
         return;
     }
     // No numeric id = a malformed-request error; an unknown id = it already timed out.
@@ -145,7 +223,8 @@ fn handle_line(app: &AppHandle, line: &[u8]) {
         eprintln!("wordstrobe: helper reply without id: {value}");
         return;
     };
-    let tx = app.state::<Ocr>().pending.lock().unwrap().remove(&id);
+    state.answered.store(true, Ordering::Release);
+    let tx = state.pending.lock().unwrap().remove(&id);
     if let Some(tx) = tx {
         let _ = tx.send(match value.get("error").and_then(Value::as_str) {
             Some(e) => Err(e.to_string()),
@@ -162,22 +241,77 @@ pub fn ocr(app: &AppHandle, path: &Path) -> Reply {
     state.pending.lock().unwrap().insert(id, tx);
 
     let request = json!({ "id": id, "path": path.to_string_lossy(), "langs": [], "fast": false });
+    // The pid is read under the same lock as the write: a timeout must only kill the helper this
+    // request went to, not a replacement that has been spawned since.
     let sent = match state.child.lock().unwrap().as_mut() {
         Some(child) => child
             .write(format!("{request}\n").as_bytes())
+            .map(|()| state.pid.load(Ordering::Acquire))
             .map_err(|e| e.to_string()),
         None => Err("OCR helper is not running".to_string()),
     };
-    let reply = sent.and_then(|()| match rx.recv_timeout(OCR_TIMEOUT) {
+    let reply = sent.and_then(|pid| match rx.recv_timeout(OCR_TIMEOUT) {
         Ok(reply) => reply,
         Err(_) => {
             // A hung helper would time out every later request too: kill it, `start_helper` respawns.
-            if let Some(child) = state.child.lock().unwrap().take() {
-                let _ = child.kill();
-            }
+            kill_helper(&state, pid);
             Err("OCR timed out".to_string())
         }
     });
     state.pending.lock().unwrap().remove(&id);
     reply
+}
+
+/// SIGKILL straight to the pid. `CommandChild::kill` cannot be used: on macOS `waitid` also returns
+/// for a *stopped* child, after which `shared_child` sits in `waitpid` holding the lock that `kill`
+/// (and even `pid()`) needs, so killing a stopped helper would block forever.
+fn kill_helper(state: &Ocr, pid: u32) {
+    // Its own statement, so the mutex guard is gone before the kill. The child is dropped below,
+    // which closes the helper's stdin, and later requests fail fast instead of writing to it.
+    let child = {
+        let mut slot = state.child.lock().unwrap();
+        if state.pid.load(Ordering::Acquire) == pid {
+            state.pid.store(0, Ordering::Release);
+            slot.take()
+        } else {
+            None
+        }
+    };
+    if child.is_none() {
+        return; // already exited and replaced
+    }
+    // SAFETY: plain syscall. The pid is that of our own, not yet cleaned up child.
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+        eprintln!(
+            "wordstrobe: cannot kill OCR helper {pid}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    drop(child);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn secs(backoff: &mut Backoff, healthy: bool) -> u64 {
+        backoff.next(healthy).as_secs()
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_the_cap() {
+        let mut b = Backoff::new();
+        let delays: Vec<u64> = (0..9).map(|_| secs(&mut b, false)).collect();
+        assert_eq!(delays, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+    }
+
+    #[test]
+    fn backoff_starts_over_after_a_healthy_helper() {
+        let mut b = Backoff::new();
+        for _ in 0..5 {
+            secs(&mut b, false);
+        }
+        assert_eq!(secs(&mut b, true), 1);
+        assert_eq!(secs(&mut b, false), 2);
+    }
 }

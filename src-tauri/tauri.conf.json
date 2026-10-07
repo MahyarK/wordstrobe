@@ -18,6 +18,7 @@
       {
         "label": "reader",
         "url": "reader.html",
+        "title": "Wordstrobe",
         "width": 520,
         "height": 190,
         "minWidth": 360,

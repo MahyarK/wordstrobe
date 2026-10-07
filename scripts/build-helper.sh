@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds the Vision OCR sidecar into src-tauri/binaries/ under Tauri's externalBin naming.
-#   scripts/build-helper.sh              host target triple only (tauri dev)
-#   scripts/build-helper.sh --universal  arm64 + x86_64 + lipo'd wordstrobe-ocr-universal-apple-darwin (release)
+#   scripts/build-helper.sh              the target Tauri is building for (TAURI_ENV_TARGET_TRIPLE, set for
+#                                        before-commands), else the host target triple
+#   scripts/build-helper.sh --universal  arm64 + x86_64 + lipo'd wordstrobe-ocr-universal-apple-darwin; implied by
+#                                        `tauri build --target universal-apple-darwin`
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +30,8 @@ build() { # <rust target triple>
     mv "$bin.tmp" "$bin"
 }
 
-if [[ ${1:-} == --universal ]]; then
+target=${TAURI_ENV_TARGET_TRIPLE:-}
+if [[ ${1:-} == --universal || $target == universal-apple-darwin ]]; then
     build aarch64-apple-darwin
     build x86_64-apple-darwin
     universal="$out/wordstrobe-ocr-universal-apple-darwin"
@@ -38,5 +41,5 @@ if [[ ${1:-} == --universal ]]; then
         mv "$universal.tmp" "$universal"
     fi
 else
-    build "$(rustc -vV | sed -n 's/^host: //p')"
+    build "${target:-$(rustc -vV | sed -n 's/^host: //p')}"
 fi
