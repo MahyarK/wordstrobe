@@ -57,20 +57,32 @@ export const DEFAULT_TIMING: Timing = Object.freeze({
 // ---------------------------------------------------------------------------------------------
 
 const ALNUM = /[\p{L}\p{N}]/u;
-/** A base character plus its combining marks (an orphan mark counts as its own glyph). */
+/** Fallback when `Intl.Segmenter` is missing: a base character plus its combining marks. */
 const GLYPH = /\P{M}\p{M}*|\p{M}+/gu;
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 /** Scripts that are written without spaces between words (Korean uses spaces, so it is not here). */
 const NO_SPACE_SCRIPT =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 const NO_SPACE_LANGS = new Set(["zh", "ja", "th", "lo", "km", "my"]);
+// ponytail: a word in one of these scripts (right to left; Indic and related scripts with conjuncts
+// or reordering vowels) gets no ORP pivot: `splitOrp` returns ["", word, ""]. Cutting it into spans
+// would put its logical start on the wrong side of the pivot (RTL) or change the glyph shapes
+// (Arabic joining, conjuncts). Proper RTL and conjunct-aware pivot rendering is a later improvement.
+const NO_PIVOT_SCRIPT =
+  /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}\p{Script=Khmer}\p{Script=Myanmar}\p{Script=Tibetan}]/u;
+const GRAPHEMES =
+  typeof Intl.Segmenter === "function" ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : undefined;
 
+/** User-perceived characters: flags, ZWJ emoji, base + marks, Hangul syllables and Indic conjuncts stay whole. */
 function glyphs(s: string): string[] {
-  return s.match(GLYPH) ?? [];
+  if (PRINTABLE_ASCII.test(s)) return s.split("");
+  if (!GRAPHEMES) return s.match(GLYPH) ?? [];
+  return Array.from(GRAPHEMES.segment(s), (g) => g.segment);
 }
 
 function alnumCount(s: string): number {
   let n = 0;
-  for (const ch of s) if (ALNUM.test(ch)) n++;
+  for (const g of glyphs(s)) if (ALNUM.test(g)) n++;
   return n;
 }
 
@@ -79,7 +91,7 @@ function alnumCount(s: string): number {
 // ---------------------------------------------------------------------------------------------
 
 // Closing quotes and brackets that may follow the terminator: `done."`  `(done.)`  `Go.”`
-const TRAILING_CLOSERS = /[\p{Pe}\p{Pf}"']+$/u;
+const CLOSER = /^[\p{Pe}\p{Pf}"']$/u; // all BMP, so one UTF-16 unit at a time is exact
 const SENTENCE_END = /[.!?…。！？．‼؟۔।]$/u;
 const CLAUSE_END = /[,;:–—，、；：]$/u;
 // Deliberately tiny. "etc." and single-letter initials are ambiguous, so they count as sentence ends.
@@ -88,8 +100,11 @@ const ABBREVIATIONS = new Set(["e.g", "i.e", "mr", "mrs", "ms", "dr", "prof", "v
 type EndKind = "sentence" | "clause" | "none";
 
 function endKind(text: string): EndKind {
-  const closers = TRAILING_CLOSERS.exec(text)?.[0] ?? "";
-  const body = text.slice(0, text.length - closers.length);
+  // A loop instead of /[...]+$/u: that regex is quadratic on a long run of closers.
+  let cut = text.length;
+  while (cut > 0 && CLOSER.test(text[cut - 1]!)) cut--;
+  const closers = text.slice(cut);
+  const body = text.slice(0, cut);
   if (SENTENCE_END.test(body)) {
     if (body.endsWith(".")) {
       const word = body.slice(0, -1).replace(/^[^\p{L}]+/u, "").toLowerCase();
@@ -106,7 +121,8 @@ function endKind(text: string): EndKind {
 // ---------------------------------------------------------------------------------------------
 
 const LIGATURES = /[ﬀ-ﬆ]/g; // ﬀ ﬁ ﬂ ﬃ ﬄ ﬅ ﬆ
-const DEHYPHENATE = /(\p{L})[-‐]\s*\n\s*(\p{Ll})/gu;
+// `[^\S\n]*` (not `\s*`) before the newline keeps the match linear on long runs of blank lines.
+const DEHYPHENATE = /(\p{L})[-‐][^\S\n]*\n\s*(\p{Ll})/gu;
 
 // Standalone fragments (<= 2 chars, no letter or digit) that are real text and survive cleanup:
 // dashes, & + = %, sentence/clause punctuation, quotes, brackets, currency, CJK punctuation.
@@ -366,6 +382,7 @@ function segmentWord(seg: Intl.Segmenter, word: string, base: number): Piece[] {
 
 /** > 13 letters: balanced parts of <= 9 letters, every part but the last ending in "-". */
 function splitLong(text: string): string[] {
+  if (text.length <= LONG_WORD_LETTERS) return [text]; // cannot hold more letters than UTF-16 units
   const gs = glyphs(text);
   let total = 0;
   for (const g of gs) if (ALNUM.test(g)) total++;
@@ -442,12 +459,14 @@ function pivotOffset(letters: number): number {
 }
 
 /**
- * Index of the pivot glyph in `word` as a UTF-16 offset (so `word.slice(i)` starts at the pivot).
- * The length is measured from the first to the last letter/digit, so leading and trailing
- * punctuation is ignored. A pivot that would land on interior punctuation ("e.g.") moves to the
- * next letter. A word with no letter or digit returns 0.
+ * UTF-16 range `[from, to)` of the pivot glyph in `word`. The length is measured from the first to
+ * the last letter/digit, so leading and trailing punctuation is ignored. A pivot that would land on
+ * interior punctuation ("e.g.") moves to the next letter. A word with no letter or digit pivots on
+ * its first glyph. Glyphs are grapheme clusters (a flag, a ZWJ family or a Devanagari conjunct is
+ * one glyph), and a word in a `NO_PIVOT_SCRIPT` is one pivot as a whole.
  */
-export function orp(word: string): number {
+function pivotRange(word: string): [number, number] {
+  if (NO_PIVOT_SCRIPT.test(word)) return [0, word.length];
   const gs = glyphs(word);
   let first = -1;
   let last = -1;
@@ -457,17 +476,25 @@ export function orp(word: string): number {
       last = i;
     }
   });
-  if (first < 0) return 0;
-  let p = first + pivotOffset(last - first + 1);
-  while (p < last && !ALNUM.test(gs[p]!)) p++;
-  return gs.slice(0, p).join("").length;
+  let p = 0;
+  if (first >= 0) {
+    p = first + pivotOffset(last - first + 1);
+    while (p < last && !ALNUM.test(gs[p]!)) p++;
+  }
+  let from = 0;
+  for (let i = 0; i < p; i++) from += gs[i]!.length;
+  return [from, from + (gs[p]?.length ?? 0)];
 }
 
+/** Index of the pivot glyph in `word` as a UTF-16 offset (so `word.slice(i)` starts at the pivot). */
+export function orp(word: string): number {
+  return pivotRange(word)[0];
+}
+
+/** `[before, pivot, after]`; the three parts always join back into `word`. */
 export function splitOrp(word: string): [string, string, string] {
-  if (word === "") return ["", "", ""];
-  const i = orp(word);
-  const pivot = glyphs(word.slice(i))[0] ?? "";
-  return [word.slice(0, i), pivot, word.slice(i + pivot.length)];
+  const [from, to] = pivotRange(word);
+  return [word.slice(0, from), word.slice(from, to), word.slice(to)];
 }
 
 // ---------------------------------------------------------------------------------------------

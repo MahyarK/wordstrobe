@@ -1,0 +1,20 @@
+{
+  "lang": "en",
+  "lines": [
+    {"t": "Sponge Cities Take Root", "x": 0.0256, "y": 0.1114, "w": 0.2775, "h": 0.0841, "c": 0.5},
+    {"t": "Cities are quietly changing how they handle rain. Instead of", "x": 0.0256, "y": 0.3091, "w": 0.4063, "h": 0.0545, "c": 0.5},
+    {"t": "sending every drop down a pipe, planners now ask where the", "x": 0.0256, "y": 0.3773, "w": 0.42, "h": 0.0545, "c": 0.5},
+    {"t": "water could stay. Parks, roofs and even parking lots are being", "x": 0.025, "y": 0.4455, "w": 0.4181, "h": 0.0545, "c": 0.5},
+    {"t": "redesigned as sponges.", "x": 0.0256, "y": 0.5136, "w": 0.1637, "h": 0.0545, "c": 0.5},
+    {"t": "Early results are encouraging. After two wet winters, the pilot", "x": 0.5381, "y": 0.3091, "w": 0.4163, "h": 0.0545, "c": 0.5},
+    {"t": "district reported far fewer flooded basements, and residents", "x": 0.5375, "y": 0.3773, "w": 0.4131, "h": 0.0545, "c": 0.5},
+    {"t": "say the gardens made the street feel calmer and greener.", "x": 0.5381, "y": 0.4455, "w": 0.3919, "h": 0.0545, "c": 0.5},
+    {"t": "Engineers warn that sponges only work when the soil beneath", "x": 0.5381, "y": 0.5818, "w": 0.4275, "h": 0.0545, "c": 0.5},
+    {"t": "them is healthy. Compacted ground sheds water like a roof, so", "x": 0.5375, "y": 0.65, "w": 0.4269, "h": 0.0545, "c": 0.5},
+    {"t": "the next step is a map of where the soil can still drink.", "x": 0.5375, "y": 0.7182, "w": 0.3663, "h": 0.0545, "c": 0.5},
+    {"t": "The idea is not new, but it is finally cheap enough to try at", "x": 0.025, "y": 0.65, "w": 0.3944, "h": 0.0545, "c": 0.5},
+    {"t": "scale. A single street of rain gardens costs less than one new", "x": 0.0256, "y": 0.7182, "w": 0.4181, "h": 0.0545, "c": 0.5},
+    {"t": "storm drain, and it keeps working long after the drain has", "x": 0.0256, "y": 0.7864, "w": 0.39, "h": 0.0545, "c": 0.5},
+    {"t": "clogged.", "x": 0.0256, "y": 0.8545, "w": 0.0588, "h": 0.0545, "c": 0.5}
+  ]
+}

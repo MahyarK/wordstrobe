@@ -8,16 +8,187 @@
   </head>
   <body>
     <main>
-      <h1>Permissions</h1>
-      <p class="row"><span id="dot" class="dot"></span><strong>Screen Recording</strong><span id="state">Checking…</span></p>
-      <p class="hint">
-        Wordstrobe needs Screen Recording to read the region you select. macOS applies a new grant only after the app relaunches.
+      <h1 class="sr-only">Wordstrobe Settings</h1>
+      <p id="demo-note" class="notice" hidden>
+        Demo mode: this page is not running inside the app, so changes are kept in memory only.
       </p>
-      <div class="buttons">
-        <button id="request" type="button">Request</button>
-        <button id="open" type="button">Open System Settings</button>
-        <button id="relaunch" type="button">Relaunch</button>
-      </div>
+      <p id="save-error" class="notice error" role="alert" hidden></p>
+
+      <!-- Permissions (ids are used by the permission polling in settings.ts) -->
+      <section aria-labelledby="h-permissions">
+        <h2 id="h-permissions">Permissions</h2>
+        <div class="card">
+          <div class="row">
+            <div class="row-text">
+              <span class="row-title"><span id="dot" class="dot"></span>Screen Recording</span>
+              <p class="row-hint">
+                Wordstrobe needs Screen Recording to read the region you select. macOS applies a new grant only after
+                the app relaunches.
+              </p>
+            </div>
+            <span id="state" class="state" aria-live="polite">Checking…</span>
+          </div>
+          <div class="row actions">
+            <button id="request" type="button">Request</button>
+            <button id="open" type="button">Open System Settings</button>
+            <button id="relaunch" type="button">Relaunch</button>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="h-general">
+        <h2 id="h-general">General</h2>
+        <div class="card">
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="placement">Popup position</label>
+              <p class="row-hint" id="placement-hint">Where the reader appears when you capture a region.</p>
+            </div>
+            <select id="placement" aria-describedby="placement-hint">
+              <option value="cursor">Near the cursor</option>
+              <option value="center">Screen center</option>
+              <option value="last">Last position</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="startDelay-range">Start delay</label>
+              <p class="row-hint" id="startDelay-hint">Pause before the first word flashes.</p>
+            </div>
+            <div class="control">
+              <input id="startDelay-range" type="range" min="0" max="2000" step="50" aria-describedby="startDelay-hint" />
+              <output id="startDelay-out" for="startDelay-range"></output>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <span class="row-title">Read region</span>
+              <p class="row-hint">Shortcut for capturing a region. Customizable in a later version.</p>
+            </div>
+            <kbd id="hotkey" aria-label="Option Shift R">⌥⇧R</kbd>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="h-reading">
+        <h2 id="h-reading">Reading</h2>
+        <div class="card">
+          <div class="row preview-row">
+            <div id="preview" class="preview" data-theme="system" role="img" aria-label="Preview of the reading display">
+              <div class="word" aria-hidden="true">
+                <span id="pv-l" class="l"></span><b id="pv-p" class="pivot"></b><span id="pv-r" class="r"></span>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" id="wpm-title" for="wpm">Speed</label>
+              <p class="row-hint">Words per minute (100–1200). In the reader, ↑ and ↓ change it by 25.</p>
+            </div>
+            <div class="control">
+              <input id="wpm-range" type="range" min="100" max="1200" step="25" aria-labelledby="wpm-title" />
+              <input id="wpm" class="num" type="number" min="100" max="1200" step="25" inputmode="numeric" />
+              <span class="unit">wpm</span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <span class="row-title" id="flash-label">Words per flash</span>
+              <p class="row-hint">In the reader, press 1, 2 or 3.</p>
+            </div>
+            <div class="seg" role="radiogroup" aria-labelledby="flash-label">
+              <label><input type="radio" name="wordsPerFlash" value="1" /><span>1</span></label>
+              <label><input type="radio" name="wordsPerFlash" value="2" /><span>2</span></label>
+              <label><input type="radio" name="wordsPerFlash" value="3" /><span>3</span></label>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="fontSize-range">Font size</label>
+            </div>
+            <div class="control">
+              <input id="fontSize-range" type="range" min="28" max="72" step="1" />
+              <output id="fontSize-out" for="fontSize-range"></output>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <span class="row-title" id="theme-label">Theme</span>
+            </div>
+            <div class="seg" role="radiogroup" aria-labelledby="theme-label">
+              <label><input type="radio" name="theme" value="system" /><span>System</span></label>
+              <label><input type="radio" name="theme" value="light" /><span>Light</span></label>
+              <label><input type="radio" name="theme" value="dark" /><span>Dark</span></label>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="smartResume">Smart resume</label>
+              <p class="row-hint" id="smartResume-hint">After a pause, continue from the start of the sentence.</p>
+            </div>
+            <input id="smartResume" class="switch" type="checkbox" role="switch" aria-describedby="smartResume-hint" />
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="contextLine">Context line</label>
+              <p class="row-hint" id="contextLine-hint">While paused, show the current sentence under the word.</p>
+            </div>
+            <input id="contextLine" class="switch" type="checkbox" role="switch" aria-describedby="contextLine-hint" />
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="h-voice">
+        <h2 id="h-voice">Voice</h2>
+        <div class="card">
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="readAloud">Read aloud by default</label>
+              <p class="row-hint" id="readAloud-hint">In the reader, press S to switch it on or off.</p>
+            </div>
+            <input id="readAloud" class="switch" type="checkbox" role="switch" aria-describedby="readAloud-hint" />
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <span class="row-title" id="mode-label">Mode</span>
+              <p class="row-hint">Read-along flashes the words in sync with the voice. Voice only shows the text and highlights the spoken word.</p>
+            </div>
+            <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+              <label><input type="radio" name="voiceMode" value="along" /><span>Read-along</span></label>
+              <label><input type="radio" name="voiceMode" value="voice" /><span>Voice only</span></label>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="voice">Preferred voice</label>
+              <p class="row-hint" id="voice-hint">Saved per language. Automatic forgets the saved voice of the language shown.</p>
+            </div>
+            <select id="voice" aria-describedby="voice-hint voice-saved" disabled>
+              <option value="">Automatic (best match)</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <p id="voice-saved" class="row-hint flush"></p>
+              <p id="voice-msg" class="row-hint flush" role="status" aria-live="polite">Loading voices…</p>
+            </div>
+            <button id="voice-test" type="button">Test voice</button>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="h-about">
+        <h2 id="h-about">About</h2>
+        <div class="card">
+          <div class="row">
+            <span class="row-title">Wordstrobe</span>
+            <span id="version" class="state">Version …</span>
+          </div>
+          <div class="row">
+            <p class="row-hint flush">Everything runs on this Mac. Captures are deleted right after reading.</p>
+          </div>
+        </div>
+      </section>
     </main>
     <script type="module" src="./settings.ts"></script>
   </body>

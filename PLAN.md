@@ -20,7 +20,7 @@ experiments in [`spikes/`](spikes) on an Apple M3 Pro, macOS 26.6, Xcode 27.
 | Text pipeline + RSVP engine | **Pure TypeScript** (`src/text.ts`) | Written once and shared by all platforms. Unit-testable with `node --test`. |
 | Read aloud | **Web Speech API** inside the webview | *Measured:* fires per-word `boundary` events in WKWebView, so read-along sync needs zero native code. |
 | Privacy | **Everything on-device** | Vision and system voices run locally. No network except an optional update check. |
-| Latency target | **mouse-up → first word < 450 ms** | *Measured:* OCR ≈ 270–300 ms when warm. |
+| Latency target | **mouse-up → first word < 450 ms** for a paragraph-sized capture (~100 words) | *Measured:* OCR ≈ 270 ms warm for ~100 words. It grows with the amount of text: ~680 ms at ~450 words, 3–4 s for a text-dense full screen. |
 
 macOS v1.0 ≈ **10 dev-days** (M0–M4). Windows ≈ 4 days and Linux ≈ 5 days after the shared overlay (M6).
 
@@ -53,6 +53,9 @@ Accounts, cloud OCR, sync, plugin system, Mac App Store. The sandbox would block
 |---|---|---|
 | `RecognizeTextRequest` `.accurate`, 1600×1000 px region | **413–508 ms cold, ~300 ms warm** | Keep the OCR process alive and pre-warm it at launch. |
 | `RecognizeTextRequest` `.fast` (with `minimumTextHeightFraction = 0`) | **~70 ms** warm at 1600×1000, ~27 ms on small images | Optional "quick mode". Latin scripts only: auto-language German loses umlauts (0.95), and Chinese scores 0. The accurate path stays the default. (The first spike's 35 ms run recognized no text, because Vision's default minimum text height is 1/32 of the image.) |
+| OCR time vs amount of text (review, M3 Pro) | 76 words ≈ 270 ms · 456 words ≈ 680 ms · full screen 3.1–3.8 s | The latency budget holds for paragraph-sized captures. Show the popup first ("show, then fill") and scale the timeout. |
+| Documents request on tall images | > ~2000 px tall: partial or garbled (2400×3956 px → 134 of 3800 words) | OCR overlapping ~1400 px horizontal bands and de-duplicate the overlap. |
+| Blank-image pre-warm | Finishes in 94 ms without loading the recognizer | Pre-warm with a small rendered text image instead (ready at ~230 ms after launch, off the critical path). |
 | `RecognizeDocumentsRequest` (macOS 26+) | **~270 ms** and returns **paragraphs** with lines already joined | Use it on macOS 26+. It's faster than accurate text and skips paragraph heuristics. |
 | Web Speech in WKWebView | `boundary` events with `charIndex`, `charLength`, `elapsedTime` per word | Read-along sync works from the webview. `getVoices()` is empty until `voiceschanged` fires. |
 | `screencapture` without Screen Recording permission | Exits 1, prints "could not create image from rect", **writes no file** | Always preflight permission. Otherwise "no permission" looks the same as "user pressed Esc". |
@@ -112,7 +115,7 @@ pub fn ocr(capture: &Capture) -> Result<OcrResult>;   // { paragraphs?, lines?, 
 ← {"id":7,"lines":[{"t":"Rapid serial","x":0.04,"y":0.06,"w":0.5,"h":0.03,"c":0.98}],"lang":"en","ms":300} // macOS 15–25
 ← {"id":7,"error":"…"}
 ```
-On start, the helper OCRs a blank 64×64 image to pre-warm Vision, then prints `{"ready":true}`.
+On start, the helper OCRs a small rendered text image to pre-warm Vision (a blank image doesn't load the recognizer), then prints `{"ready":true}`.
 
 **Rust → reader window** (Tauri events):
 ```ts
@@ -147,9 +150,9 @@ hotkey ─▶ busy? ─yes─▶ ignore
 | hotkey → crosshair | < 100 ms | spawning `screencapture` ≈ 40 ms (*measured*, process start) |
 | mouse-up → PNG on disk | < 80 ms | measure in M1. Fall back to `-t tiff` (no compression) if over budget. |
 | popup visible | < 50 ms | pre-created hidden webview, just `show()` |
-| OCR | ≤ 300 ms | *measured*: 270 ms (documents), 300 ms (accurate, warm) |
+| OCR | ≤ 300 ms for ~100 words | *measured*: 270 ms (documents), 300 ms (accurate, warm). It scales with text: ~680 ms at ~450 words. |
 | text pipeline + first frame | < 20 ms | pure TS, O(n) |
-| **mouse-up → first word on screen** | **< 450 ms p50** | Playback then starts after the 600 ms start delay, which is a setting. |
+| **mouse-up → first word on screen** | **< 450 ms p50** (~100-word capture) | Playback then starts after the 600 ms start delay, which is a setting. |
 
 ---
 
@@ -180,6 +183,8 @@ The pivot letter (red) always sits at the same x position, so the eye never move
 Rendering is CSS only, with no measuring or reflow: `grid-template-columns: 2fr auto 3fr`, holding
 `<span class=l>` (right-aligned), `<b class=pivot>` and `<span class=r>` (left-aligned). The pivot
 column sits at about 40 % of the width. Thin guide ticks sit above and below the pivot.
+RTL scripts (Arabic, Hebrew) and scripts whose shaping breaks when split (Devanagari and other Indic
+scripts) are shown whole and centered, without a pivot, in v1.
 
 ### 5.3 Timing (defaults; every multiplier is a setting)
 ```
@@ -421,7 +426,7 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
 
 ## 14. Optimizations
 
-1. **Pre-warm everything at launch.** Start the helper and run one blank OCR, which saves 100–200 ms of Vision cold start (*measured* 413–508 → ~300 ms). Create the reader webview hidden, so showing it is ~free.
+1. **Pre-warm everything at launch.** Start the helper and run one OCR on a small rendered text image, which saves the Vision cold start (*measured* 413–508 → ~300 ms; a blank image doesn't load the recognizer). Create the reader webview hidden, so showing it is ~free.
 2. **Show, then fill.** The popup appears at mouse-up and OCR lands about 300 ms later, so most of the latency is hidden.
 3. **Best request per OS.** On macOS 26+, the documents request is faster than accurate text, and its paragraphs skip the heuristics.
 4. **Quick mode.** `.fast` OCR (~70 ms, *measured*) as an opt-in for large or simple Latin-script captures. The selftest quantifies how much accuracy it loses.
