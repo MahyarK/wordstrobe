@@ -1,11 +1,17 @@
-# Wordstrobe
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/hero-dark.svg">
+  <img alt="Wordstrobe: the words 'Read any text on your screen faster.' flash one at a time on a fixed red pivot letter, then the name Wordstrobe" src="docs/readme/hero-light.svg" width="100%">
+</picture>
 
 Read any text on your screen faster. Press a shortcut, drag a box around text like a screenshot,
 and a small popup flashes it one word at a time (Rapid Serial Visual Presentation), with optional
 read-aloud. Everything runs on-device.
 
-**Status:** v0.1 for macOS 15 or later (Apple Silicon and Intel). See [PLAN.md](PLAN.md) for the architecture, specs,
-milestones and the cross-platform roadmap.
+**[Download for macOS](https://github.com/MahyarK/wordstrobe/releases/latest)**: macOS 15 or later, Apple Silicon and Intel.
+
+<img alt="Demo: Option-Shift-R, a box is dragged over a paragraph, the popup flashes it word by word, Space pauses on the sentence, and the done screen shows 3 seconds saved" src="docs/readme/demo.gif" width="100%">
+
+**Status:** v0.1. See [PLAN.md](PLAN.md) for the architecture, specs, milestones and the cross-platform roadmap.
 
 ## Install
 
@@ -67,3 +73,8 @@ swiftc -O -o /tmp/ocr_latency spikes/ocr_latency.swift && /tmp/ocr_latency
 ```bash
 swiftc -O -o /tmp/webspeech spikes/webspeech_boundary.swift && /tmp/webspeech
 ```
+
+## README visuals
+
+`node docs/readme/hero.mjs` regenerates the animated banner (`hero-dark.svg`, `hero-light.svg`). `demo.gif` is a
+screencast of the real reader page in headless Chrome, encoded with ffmpeg.
