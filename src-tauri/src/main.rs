@@ -1,11 +1,36 @@
-// One file per OS, same free functions (PLAN §3). Other OSes fail to compile until their file exists.
-#[cfg(target_os = "macos")]
-#[path = "platform/macos.rs"]
+//! Wordstrobe: tray, global hotkey and the read flow (PLAN §3, §4). All OS-specific work sits
+//! behind the platform seam: one file per OS in `platform/`, selected below, exporting exactly these
+//! free functions. There is no trait because a build never has more than one implementation.
+//!
+//! ```ignore
+//! pub fn setup(app: &AppHandle);                 // manage state, start helpers (macOS: the OCR helper)
+//! pub fn has_capture_permission() -> bool;       // Windows/Linux: true
+//! pub fn request_capture_permission() -> bool;   // Windows/Linux: true
+//! pub fn open_privacy_settings();                // Windows/Linux: no-op
+//! /// Lets the user drag a region and writes a PNG of it to `path`. `Ok(false)` = cancelled.
+//! /// Blocking: runs on the worker thread of the read flow, never on the main thread.
+//! pub fn capture_region(app: &AppHandle, path: &Path) -> Result<bool, String>;
+//! pub fn show_over_fullscreen(window: &WebviewWindow); // keep the popup above full-screen apps (Windows/Linux: no-op)
+//! /// OCR of the PNG at `path`: `{ paragraphs?: [..], lines?: [..], lang, ms }` (PLAN §3). Blocking, worker thread.
+//! pub fn ocr(app: &AppHandle, path: &Path) -> Result<serde_json::Value, String>;
+//! pub fn is_wayland() -> bool;                   // false except in Linux Wayland sessions
+//! ```
+//!
+//! Windows and Linux X11 capture with the freeze-frame overlay (`overlay.rs`, from `capture_region`);
+//! macOS uses the system's `screencapture -i`.
+#[cfg_attr(target_os = "macos", path = "platform/macos.rs")]
+#[cfg_attr(windows, path = "platform/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "platform/linux.rs")]
 mod platform;
+
+#[cfg(not(target_os = "macos"))]
+mod overlay;
+// The overlay's pure geometry builds everywhere, so its tests also run on macOS.
+#[cfg(any(test, not(target_os = "macos")))]
+mod region;
 
 use std::{
     fs,
-    os::unix::fs::{DirBuilderExt, MetadataExt},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -13,6 +38,8 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 
 use serde_json::{json, Value};
 use tauri::{
@@ -148,7 +175,9 @@ fn reader_position(app: &AppHandle, reader: &WebviewWindow) -> Option<(f64, f64)
         .outer_size()
         .ok()?
         .to_logical::<f64>(reader.scale_factor().ok()?);
-    // ponytail: tao reports the macOS cursor in physical px of the *primary* monitor. Windows/Linux need their own math in M7.
+    // ponytail: this is macOS math (tao reports the cursor in physical px of the *primary* monitor and
+    // every monitor in points of its own scale). It is exact for Windows/Linux desktops whose monitors
+    // share one scale factor; mixed-DPI ones need the same in physical px, converted per target monitor.
     let cursor = app.cursor_position().ok()?;
     let primary = app.primary_monitor().ok()?.map(|m| Screen::new(&m));
     let screens: Vec<Screen> = app
@@ -261,6 +290,7 @@ fn capture_dir() -> PathBuf {
 }
 
 /// `file`: the `--read-image` test entry (debug builds only), which skips the capture and leaves the file alone.
+/// `None` = the user's capture: the hotkey, the tray item or `--read-region`.
 fn start_read(app: &AppHandle, file: Option<PathBuf>) {
     let Some(busy) = Busy::take() else { return };
     let app = app.clone();
@@ -276,10 +306,11 @@ fn read(app: &AppHandle, file: Option<PathBuf>) {
         Some(path) => (path, "file", Instant::now()),
         None => {
             if !platform::has_capture_permission() {
+                eprintln!("wordstrobe: no permission to capture the screen, opening Settings");
                 show_window(app, "settings");
                 return;
             }
-            match capture() {
+            match capture(app) {
                 Ok(Some((path, mouse_up))) => (path, "region", mouse_up),
                 Ok(None) => return, // Esc: cancelled, stay silent
                 Err(e) => {
@@ -355,6 +386,7 @@ fn log_text(_source: &str, _payload: &Value) -> String {
 
 /// `$TMPDIR/wordstrobe` must be a real directory of ours that nobody else can enter. `create` alone
 /// is not enough: when the path already exists it keeps its owner and mode, and a symlink is followed.
+#[cfg(unix)]
 fn private_dir(dir: &Path) -> Result<(), String> {
     fs::DirBuilder::new()
         .recursive(true)
@@ -367,6 +399,7 @@ fn private_dir(dir: &Path) -> Result<(), String> {
     check_private(dir, &meta, unsafe { libc::geteuid() })
 }
 
+#[cfg(unix)]
 fn check_private(dir: &Path, meta: &fs::Metadata, uid: u32) -> Result<(), String> {
     let shown = dir.display();
     if !meta.file_type().is_dir() {
@@ -385,12 +418,18 @@ fn check_private(dir: &Path, meta: &fs::Metadata, uid: u32) -> Result<(), String
     }
 }
 
+/// Windows: `%TEMP%` is per user and only that user (and SYSTEM) can enter it, so there is nothing to check.
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))
+}
+
 /// `Ok(None)` = cancelled. Otherwise the PNG and the moment of the mouse-up.
-fn capture() -> Result<Option<(PathBuf, Instant)>, String> {
+fn capture(app: &AppHandle) -> Result<Option<(PathBuf, Instant)>, String> {
     let dir = capture_dir();
     private_dir(&dir)?;
     let path = dir.join(format!("{}.png", COUNTER.fetch_add(1, Ordering::Relaxed)));
-    if !platform::capture_region(&path)? {
+    if !platform::capture_region(app, &path)? {
         return Ok(None);
     }
     let (now, wall) = (Instant::now(), SystemTime::now());
@@ -451,12 +490,22 @@ fn read_image_arg(args: &[String], cwd: &Path) -> Option<PathBuf> {
     Some(cwd.join(args.get(i + 1)?))
 }
 
+/// `--read-region`: start the read flow as if the hotkey was pressed. On Wayland, where no app can
+/// grab a global hotkey, this is what the user binds a desktop shortcut to. Same effect as the
+/// hotkey, so it is safe to accept in release builds (unlike `--read-image`).
+fn read_region_arg(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--read-region")
+}
+
 /// A second launch forwards its arguments to the running instance.
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
 fn second_launch(app: &AppHandle, argv: &[String], cwd: &str) {
     #[cfg(debug_assertions)]
     if let Some(path) = read_image_arg(argv, Path::new(cwd)) {
         return start_read(app, Some(path));
+    }
+    if read_region_arg(argv) {
+        return start_read(app, None);
     }
     show_window(app, "settings");
 }
@@ -479,6 +528,17 @@ fn request_permission() -> bool {
 #[tauri::command]
 async fn open_privacy_settings() {
     platform::open_privacy_settings();
+}
+
+/// What the UI needs to know about the OS: `{ os: "macos" | "windows" | "linux", wayland, hotkey: { ok, label } }`.
+/// `ok`: whether the hotkey configured at launch is registered (the tray shows the same `label`).
+#[tauri::command]
+fn platform_info(app: AppHandle) -> Value {
+    json!({
+        "os": std::env::consts::OS,
+        "wayland": platform::is_wayland(),
+        "hotkey": { "ok": HOTKEY_OK.load(Ordering::Acquire), "label": hotkey_label(&app) },
+    })
 }
 
 #[tauri::command]
@@ -522,36 +582,50 @@ fn open_settings(app: AppHandle) {
 // ---------------------------------------------------------------------------------------------
 // Setup
 
-/// "Alt+Shift+R" as shown in macOS menus: ⌃⌥⇧⌘ in that order, then the key.
-fn shortcut_label(shortcut: &Shortcut) -> String {
-    let mut label: String = [
-        (Modifiers::CONTROL, '⌃'),
-        (Modifiers::ALT, '⌥'),
-        (Modifiers::SHIFT, '⇧'),
-        (Modifiers::SUPER, '⌘'),
+/// "Alt+Shift+R" as shown to the user. On macOS that is ⌃⌥⇧⌘ in the order of its menus, then the
+/// key; elsewhere the usual "Ctrl+Alt+Shift+Win+R" (`os` is `std::env::consts::OS`).
+fn shortcut_label(shortcut: &Shortcut, os: &str) -> String {
+    let held = [
+        (Modifiers::CONTROL, "Ctrl", "⌃"),
+        (Modifiers::ALT, "Alt", "⌥"),
+        (Modifiers::SHIFT, "Shift", "⇧"),
+        (Modifiers::SUPER, if os == "windows" { "Win" } else { "Super" }, "⌘"),
     ]
-    .iter()
-    .filter(|(modifier, _)| shortcut.mods.contains(*modifier))
-    .map(|&(_, glyph)| glyph)
-    .collect();
+    .into_iter()
+    .filter(|&(modifier, ..)| shortcut.mods.contains(modifier));
     let key = shortcut.key.to_string(); // "KeyR", "Digit1", "Space", "F5", ...
-    label.push_str(
-        key.strip_prefix("Key")
-            .or_else(|| key.strip_prefix("Digit"))
-            .unwrap_or(&key),
-    );
-    label
+    let key = key
+        .strip_prefix("Key")
+        .or_else(|| key.strip_prefix("Digit"))
+        .unwrap_or(&key);
+    if os == "macos" {
+        held.map(|(.., glyph)| glyph).chain([key]).collect()
+    } else {
+        held.map(|(_, name, _)| name).chain([key]).collect::<Vec<_>>().join("+")
+    }
 }
 
 fn hotkey_setting(app: &AppHandle) -> String {
     setting(app, "hotkeyRegion").unwrap_or_else(|| DEFAULT_HOTKEY.into())
 }
 
+/// The configured hotkey for display; the raw setting when it is not a valid shortcut.
+fn hotkey_label(app: &AppHandle) -> String {
+    let key = hotkey_setting(app);
+    match key.parse::<Shortcut>() {
+        Ok(shortcut) => shortcut_label(&shortcut, std::env::consts::OS),
+        Err(_) => key,
+    }
+}
+
+static HOTKEY_OK: AtomicBool = AtomicBool::new(false);
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // Built once at startup, like the registration: a hotkey changed in Settings applies after a relaunch.
-    let read = match hotkey_setting(app).parse::<Shortcut>() {
-        Ok(shortcut) => format!("Read Region  {}", shortcut_label(&shortcut)),
-        Err(_) => "Read Region".into(),
+    let read = if HOTKEY_OK.load(Ordering::Acquire) {
+        format!("Read Region  {}", hotkey_label(app))
+    } else {
+        "Read Region".into()
     };
     let menu = Menu::with_items(
         app,
@@ -562,8 +636,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
         ],
     )?;
+    // tray.png is a black template image that macOS recolors for the menu bar; on a dark Windows or
+    // Linux panel it would be invisible, so there the (colored) app icon is used.
+    let icon = match app.default_window_icon() {
+        Some(icon) if !cfg!(target_os = "macos") => icon.clone(),
+        _ => tauri::include_image!("icons/tray.png"),
+    };
     TrayIconBuilder::new()
-        .icon(tauri::include_image!("icons/tray.png"))
+        .icon(icon)
         .icon_as_template(true)
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -578,6 +658,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 fn register_hotkey(app: &AppHandle) {
     let key = hotkey_setting(app);
+    // No app can grab a global hotkey on Wayland (an X11 grab through XWayland only sees keys while an
+    // X11 window has the focus), so it is not tried: the user binds `--read-region` to a desktop shortcut.
+    if platform::is_wayland() {
+        eprintln!("wordstrobe: no global hotkey on Wayland, bind a desktop shortcut to `wordstrobe --read-region`");
+        return;
+    }
     let result = key
         .parse::<Shortcut>()
         .map_err(|e| e.to_string())
@@ -586,14 +672,17 @@ fn register_hotkey(app: &AppHandle) {
                 .register(shortcut)
                 .map_err(|e| e.to_string())
         });
-    if let Err(e) = result {
-        eprintln!("wordstrobe: cannot register hotkey {key:?}: {e}");
-        show_window(app, "settings");
+    match result {
+        Ok(()) => HOTKEY_OK.store(true, Ordering::Release),
+        Err(e) => {
+            eprintln!("wordstrobe: cannot register hotkey {key:?}: {e}");
+            show_window(app, "settings");
+        }
     }
 }
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Must stay first. A second launch forwards its args here instead of starting another app.
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             second_launch(app, &argv, &cwd)
@@ -622,11 +711,20 @@ fn main() {
             permission_status,
             request_permission,
             open_privacy_settings,
+            platform_info,
             relaunch,
             reader_ready,
             close_reader,
             open_settings,
-        ])
+            #[cfg(not(target_os = "macos"))]
+            overlay::overlay_ready,
+            #[cfg(not(target_os = "macos"))]
+            overlay::overlay_select,
+        ]);
+    // The frozen frames of the region overlay are served from memory (see overlay.rs).
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.register_asynchronous_uri_scheme_protocol(overlay::SCHEME, overlay::protocol);
+    builder
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -656,19 +754,24 @@ fn main() {
                 remember_reader_size(handle, &reader);
             }
 
-            app.manage(platform::Ocr::default());
-            platform::start_helper(handle);
+            #[cfg(not(target_os = "macos"))]
+            app.manage(overlay::Overlay::default());
+            platform::setup(handle);
+            register_hotkey(handle); // before the tray, which shows the hotkey only when it works
             build_tray(handle)?;
-            register_hotkey(handle);
 
+            let args: Vec<String> = std::env::args().collect();
             #[cfg(debug_assertions)]
             {
-                let args: Vec<String> = std::env::args().collect();
                 let cwd = std::env::current_dir().unwrap_or_default();
                 if let Some(path) = read_image_arg(&args, &cwd) {
                     start_read(handle, Some(path));
                     return Ok(());
                 }
+            }
+            if read_region_arg(&args) {
+                start_read(handle, None);
+                return Ok(());
             }
             if !platform::has_capture_permission() {
                 show_window(handle, "settings"); // first run (PLAN §8)
@@ -683,6 +786,8 @@ fn main() {
             if let tauri::RunEvent::Reopen { .. } = event {
                 show_window(app, "settings");
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
         });
 }
 
@@ -843,22 +948,46 @@ mod tests {
         assert_eq!(clamp_size(400.0, f64::INFINITY), None);
     }
 
-    fn label(shortcut: &str) -> String {
-        shortcut_label(&shortcut.parse().unwrap())
+    fn label(shortcut: &str, os: &str) -> String {
+        shortcut_label(&shortcut.parse().unwrap(), os)
     }
 
     #[test]
     fn tray_label_shows_the_configured_hotkey() {
-        assert_eq!(label(DEFAULT_HOTKEY), "⌥⇧R");
-        assert_eq!(label("Cmd+Ctrl+Space"), "⌃⌘Space");
-        assert_eq!(label("CmdOrCtrl+Shift+Digit1"), "⇧⌘1");
-        assert_eq!(label("Ctrl+Alt+Shift+Cmd+F5"), "⌃⌥⇧⌘F5");
-        assert_eq!(label("F5"), "F5");
+        assert_eq!(label(DEFAULT_HOTKEY, "macos"), "⌥⇧R");
+        assert_eq!(label("Cmd+Ctrl+Space", "macos"), "⌃⌘Space");
+        assert_eq!(label("Ctrl+Alt+Shift+Cmd+F5", "macos"), "⌃⌥⇧⌘F5");
+        assert_eq!(label("F5", "macos"), "F5");
+    }
+
+    #[test]
+    fn other_systems_spell_the_modifiers_out() {
+        assert_eq!(label(DEFAULT_HOTKEY, "windows"), "Alt+Shift+R");
+        assert_eq!(label("Ctrl+Alt+Shift+R", "linux"), "Ctrl+Alt+Shift+R");
+        assert_eq!(label("Cmd+Ctrl+Space", "windows"), "Ctrl+Win+Space");
+        assert_eq!(label("Super+Digit1", "linux"), "Super+1");
+        assert_eq!(label("F5", "linux"), "F5");
+    }
+
+    #[test]
+    fn cmd_or_ctrl_is_the_command_key_on_macos_and_control_elsewhere() {
+        let expected = if cfg!(target_os = "macos") { "⇧⌘1" } else { "Ctrl+Shift+1" };
+        assert_eq!(label("CmdOrCtrl+Shift+Digit1", std::env::consts::OS), expected);
+    }
+
+    #[test]
+    fn read_region_is_recognised_among_other_arguments() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(read_region_arg(&args(&["wordstrobe", "--read-region"])));
+        assert!(!read_region_arg(&args(&["wordstrobe"])));
+        assert!(!read_region_arg(&args(&["wordstrobe", "--read-regions", "read-region"])));
     }
 
     /// A fresh path in the temp dir, removed again at the end of the test that asked for it.
+    #[cfg(unix)]
     struct Scratch(PathBuf);
 
+    #[cfg(unix)]
     impl Scratch {
         fn new(name: &str) -> Scratch {
             let path =
@@ -869,6 +998,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
@@ -876,6 +1006,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn capture_dir_is_created_private_and_accepted_again() {
         let dir = Scratch::new("fresh");
@@ -884,6 +1015,7 @@ mod tests {
         assert_eq!(private_dir(&dir.0), Ok(()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn capture_dir_that_others_can_enter_is_refused() {
         let dir = Scratch::new("loose");
@@ -894,6 +1026,7 @@ mod tests {
             .contains("accessible to others"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn capture_dir_that_is_a_symlink_is_refused() {
         let (target, link) = (Scratch::new("target"), Scratch::new("link"));
@@ -904,6 +1037,7 @@ mod tests {
             .contains("not a real directory"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn capture_dir_of_another_user_is_refused() {
         let dir = Scratch::new("foreign");

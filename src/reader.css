@@ -25,6 +25,7 @@
   --pivot: #e5372e;
   --tick: rgba(20, 20, 22, 0.16);
   --surface: rgba(255, 255, 255, 0.5);
+  --base: #f4f4f6; /* the opaque stand-in for the glass, used where there is no vibrancy (Windows, Linux) */
   --edge: rgba(0, 0, 0, 0.1);
   --sheen: rgba(255, 255, 255, 0.7);
   --glow: rgba(229, 55, 46, 0.07);
@@ -48,6 +49,7 @@
     --pivot: #ff5a4f;
     --tick: rgba(244, 244, 246, 0.16);
     --surface: rgba(22, 22, 24, 0.5);
+    --base: #1c1c1f;
     --edge: rgba(255, 255, 255, 0.11);
     --sheen: rgba(255, 255, 255, 0.09);
     --glow: rgba(255, 90, 79, 0.11);
@@ -70,6 +72,7 @@
   --pivot: #ff5a4f;
   --tick: rgba(244, 244, 246, 0.16);
   --surface: rgba(22, 22, 24, 0.5);
+  --base: #1c1c1f;
   --edge: rgba(255, 255, 255, 0.11);
   --sheen: rgba(255, 255, 255, 0.09);
   --glow: rgba(255, 90, 79, 0.11);
@@ -92,6 +95,19 @@ body {
   cursor: default;
 }
 
+/* Windows and Linux have no vibrancy: their window is opaque (and native-shadowed, undecorated), so
+   the same palette is a solid of the same tone. The page paints it too, down to the window's corners:
+   Windows 11 rounds an undecorated window by 8 px, Linux leaves it square, and neither may show a
+   white webview behind the popup's own corners. data-os is set by os.ts. */
+:root:is([data-os="windows"], [data-os="linux"]) {
+  --surface: var(--base);
+  background: var(--base);
+}
+
+:root:is([data-os="windows"], [data-os="linux"]) body {
+  background: var(--base);
+}
+
 /* The glass: vibrancy underneath, a faint red glow from the corner the eye starts in, a lit top
    edge and a hairline border. */
 #app {
@@ -110,6 +126,14 @@ body {
     inset 0 0 0 1px var(--edge);
   overflow: hidden;
   outline: none;
+}
+
+:root[data-os="windows"] #app {
+  border-radius: 8px; /* what Windows 11 rounds the window by; on Windows 10 the corner is square under the same tone */
+}
+
+:root[data-os="linux"] #app {
+  border-radius: 0;
 }
 
 .sr {
@@ -186,6 +210,14 @@ kbd {
 
 .cluster button[aria-pressed="true"] {
   color: var(--pivot);
+}
+
+/* No voice to read with (Linux without speech-dispatcher, say): the title says what to install. */
+.cluster button:disabled {
+  opacity: 0.38;
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 /* ---- stage: one thing at a time, chosen by data-state ------------------------------------- */
@@ -744,6 +776,21 @@ kbd {
   line-height: 1.62;
 }
 
+/* The classic scrollbars of Windows and Linux webviews are a slab in a popup this small: thin and quiet. */
+:root:is([data-os="windows"], [data-os="linux"]) #text {
+  scrollbar-width: thin;
+  scrollbar-color: var(--faint) transparent;
+}
+
+:root:is([data-os="windows"], [data-os="linux"]) #text::-webkit-scrollbar {
+  width: 8px;
+}
+
+:root:is([data-os="windows"], [data-os="linux"]) #text::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--faint);
+}
+
 #app[data-view="text"] #text {
   display: block;
 }
@@ -796,8 +843,17 @@ footer {
 }
 
 #toast {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
+}
+
+/* A long toast (no voices found: what to install) takes the readout's place instead of being cut off. */
+footer:has(#toast[data-wide]:not(:empty)) #stats {
+  display: none;
 }
 
 #toast:empty {

@@ -14,8 +14,8 @@
       </p>
       <p id="save-error" class="notice error" role="alert" hidden></p>
 
-      <!-- Permissions (ids are used by the permission polling in settings.ts) -->
-      <section aria-labelledby="h-permissions">
+      <!-- Permissions (ids are used by the permission polling in settings.ts). macOS only: hidden by CSS and not polled elsewhere. -->
+      <section aria-labelledby="h-permissions" data-only="macos">
         <h2 id="h-permissions">Permissions</h2>
         <div class="card">
           <div class="row">
@@ -65,7 +65,17 @@
               <span class="row-title">Read region</span>
               <p class="row-hint">Shortcut for capturing a region. Customizable in a later version.</p>
             </div>
-            <kbd id="hotkey" aria-label="Option Shift R">⌥⇧R</kbd>
+            <span id="hotkey" class="keys" role="img" aria-label="Option Shift R"><kbd>⌥⇧R</kbd></span>
+          </div>
+          <!-- Only when the shortcut is not working: Wayland (bind a command), or taken by another app. -->
+          <div id="hotkey-note" class="row note" hidden>
+            <div class="row-text">
+              <p id="hotkey-note-text" class="row-hint flush"></p>
+              <p id="hotkey-cmd" class="cmd" hidden>
+                <code>wordstrobe --read-region</code>
+                <button id="hotkey-copy" type="button">Copy</button>
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -185,7 +195,7 @@
             <span id="version" class="state">Version …</span>
           </div>
           <div class="row">
-            <p class="row-hint flush">Everything runs on this Mac. Captures are deleted right after reading.</p>
+            <p class="row-hint flush">Everything runs on this <span id="device">Mac</span>. Captures are deleted right after reading.</p>
           </div>
         </div>
       </section>

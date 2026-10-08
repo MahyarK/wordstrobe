@@ -20,9 +20,21 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSResponder", "NSWindow"] }
 
-# Windows and Linux X11 region capture: the freeze-frame overlay (src/overlay.rs).
+# Windows and Linux X11 region capture: the freeze-frame overlay (src-tauri/src/overlay.rs).
 [target.'cfg(not(target_os = "macos"))'.dependencies]
+xcap = "0.9"
 
 [target.'cfg(windows)'.dependencies]
+# Windows.Media.Ocr (src/platform/windows.rs).
+windows = { version = "0.62", features = [
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage_Streams",
+  "Win32_System_Com",
+  "Win32_System_WinRT",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Wayland region capture: the Screenshot portal (the desktop's own picker). Tokio, as Tauri's runtime.
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot"] }

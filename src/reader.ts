@@ -5,9 +5,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LazyStore } from "@tauri-apps/plugin-store";
+import { initPlatform, keyChord, keyHint, modifier, platform, type PlatformInfo } from "./os.ts";
 import { Player } from "./player.ts";
 import { DEFAULTS, LIMITS, normalize, readPrefs, type Prefs } from "./prefs.ts";
-import { Speaker } from "./speech.ts";
+import { Speaker, VOICE_GRACE_MS, loadVoices, noVoicesMessage } from "./speech.ts";
 import {
   DEFAULT_TIMING,
   factors,
@@ -71,7 +72,7 @@ const textEl = $("text");
 const statsEl = $("stats");
 const toastEl = $("toast");
 const barEl = document.querySelector<HTMLElement>("#bar i")!;
-const speakBtn = $("btn-speak");
+const speakBtn = $<HTMLButtonElement>("btn-speak");
 const mark = document.createElement("mark");
 
 // ---------------------------------------------------------------------------------------------
@@ -104,6 +105,7 @@ let lastStats = "";
 let speechOn = false;
 let speechLive = false; // the speaker has an utterance chain going (it may be paused)
 let speechRewind = false; // paused while speaking: the next play starts the sentence over (the Player does this for the schedule)
+let voiceless = false; // the engine has been given time to list its voices and listed none
 
 let spans: HTMLElement[] = []; // token index -> its word span in the text view
 let lit: HTMLElement[] = [];
@@ -123,13 +125,46 @@ const speaker = new Speaker({
     speechLive = false;
     cancelSpeechRestart();
     setSpeech(false);
-    toast(message);
+    if (speaker.voiceless) setVoiceless(true);
+    toast(message, speaker.voiceless ? 5000 : undefined);
     if (state === "playing" && player) {
       player.play(performance.now());
       loop();
     }
   },
 });
+
+// ---------------------------------------------------------------------------------------------
+// Platform: <html data-os> now (the CSS needs it for the first paint), Rust's answer when it comes
+// ---------------------------------------------------------------------------------------------
+
+/** Labels that name keys: the command modifier is ⌘ on macOS and Ctrl elsewhere. */
+function applyPlatform({ os }: PlatformInfo): void {
+  $("btn-settings").title = `Settings (${keyChord(os, ",")})`;
+  const hint = $("copy").querySelector("kbd");
+  if (hint) hint.textContent = keyHint(os, "C");
+  renderSpeakButton();
+}
+
+/** The speaker button is off when this webview has nothing to speak with, and says why. */
+function renderSpeakButton(): void {
+  const why = !speaker.supported ? "Read aloud is not available here" : voiceless ? noVoicesMessage(platform().os) : "";
+  speakBtn.disabled = why !== "";
+  speakBtn.title = why || "Read aloud (S)";
+}
+
+function setVoiceless(none: boolean): void {
+  voiceless = none;
+  renderSpeakButton();
+}
+
+void initPlatform(TAURI ? (command) => invoke(command) : undefined, applyPlatform);
+
+if (speaker.supported) {
+  // Voices arrive late (WebKit, Chromium) or never (WebKitGTK without speech-dispatcher): "none" is believed after a grace period.
+  void loadVoices(VOICE_GRACE_MS).then((voices) => setVoiceless(voices.length === 0));
+  speechSynthesis.addEventListener("voiceschanged", () => setVoiceless(speechSynthesis.getVoices().length === 0));
+}
 
 // ---------------------------------------------------------------------------------------------
 // Rust events. Registered synchronously, before anything awaits: events sent earlier are lost.
@@ -185,7 +220,8 @@ async function onLoad(payload: Load): Promise<void> {
   chunk = s.wordsPerFlash;
   player = makePlayer(chunk, s.wpm);
   app.toggleAttribute("data-chunk", chunk > 1);
-  setSpeech(s.readAloud && speaker.supported);
+  setSpeech(s.readAloud && speaker.supported && !voiceless);
+  if (s.readAloud && voiceless) toast(noVoicesMessage(platform().os), 5000);
   if (speechOn && s.voiceMode === "voice") setView("text");
   renderFrame(0);
   setState("ready");
@@ -388,6 +424,7 @@ function updateStats(): void {
 
 function toast(text: string, ms = 1600): void {
   toastEl.textContent = text;
+  toastEl.toggleAttribute("data-wide", text.length > 34); // a long one takes the stats' place in the footer
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => (toastEl.textContent = ""), ms);
 }
@@ -653,6 +690,7 @@ function toggleSpeech(): void {
   const p = player;
   if (!p) return;
   if (!speaker.supported) return toast("Read aloud is not available here");
+  if (voiceless && !speechOn) return toast(noVoicesMessage(platform().os), 5000);
   const now = performance.now();
   cancelSpeechRestart();
   if (speechOn) {
@@ -722,14 +760,21 @@ function openSettings(): void {
 }
 
 function onKey(e: KeyboardEvent): void {
-  if (e.metaKey) {
+  const os = platform().os;
+  const mod = modifier(os, e); // ⌘ on macOS, Ctrl elsewhere
+  if (mod === "command") {
     if (e.key === "," || e.code === "Comma") openSettings();
     else if (keyName(e) === "c") void copyAll();
-    else return;
+    else {
+      // A packaged Windows/Linux webview has browser shortcuts that a popup must not trigger: Ctrl+R
+      // would reload it and lose the text, Ctrl+P would print it. (Dev builds keep their DevTools.)
+      if (os !== "macos" && import.meta.env.PROD && !e.shiftKey) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     return;
   }
-  if (e.ctrlKey) return;
+  if (mod === "other") return;
   if (e.key === "Escape") return close();
   const p = player;
   if (!p || state === "loading" || state === "error" || state === "empty") return;
@@ -765,6 +810,11 @@ function onKey(e: KeyboardEvent): void {
 }
 
 addEventListener("keydown", onKey);
+
+// The context menu of a Windows/Linux webview (Back, Reload, Inspect) is browser furniture in a popup.
+addEventListener("contextmenu", (e) => {
+  if (platform().os !== "macos" && import.meta.env.PROD) e.preventDefault();
+});
 
 let wheel = 0;
 addEventListener(

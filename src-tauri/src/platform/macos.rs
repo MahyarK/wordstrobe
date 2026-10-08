@@ -1,5 +1,5 @@
-//! macOS half of the platform seam (PLAN §3): permission FFI, `screencapture`, and the client for
-//! the long-lived Vision helper `wordstrobe-ocr` (JSON lines over stdin/stdout, PLAN §3 IPC).
+//! macOS half of the platform seam (contract: top of `main.rs`): permission FFI, `screencapture`, and
+//! the client for the long-lived Vision helper `wordstrobe-ocr` (JSON lines over stdin/stdout, PLAN §3 IPC).
 
 use std::{
     collections::HashMap,
@@ -35,6 +35,12 @@ extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
+/// Manages the helper client and starts the helper.
+pub fn setup(app: &AppHandle) {
+    app.manage(Ocr::default());
+    start_helper(app);
+}
+
 pub fn has_capture_permission() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
 }
@@ -51,7 +57,7 @@ pub fn open_privacy_settings() {
 
 /// Runs the system crosshair. `Ok(false)` = the user cancelled: `screencapture` writes no file
 /// then (and, without permission, exits 1 the same way, hence the preflight in the caller).
-pub fn capture_region(path: &Path) -> Result<bool, String> {
+pub fn capture_region(_app: &AppHandle, path: &Path) -> Result<bool, String> {
     Command::new("/usr/sbin/screencapture")
         .args(["-i", "-x"])
         .arg(path)
@@ -80,11 +86,15 @@ pub fn show_over_fullscreen(window: &WebviewWindow) {
     );
 }
 
+pub fn is_wayland() -> bool {
+    false
+}
+
 type Reply = Result<Value, String>;
 
 /// Managed state: the helper process and the requests waiting for an answer.
 #[derive(Default)]
-pub struct Ocr {
+struct Ocr {
     child: Mutex<Option<CommandChild>>,
     /// Pid of `child` (0 = none), set together with it. Cached because `CommandChild::pid` (like
     /// `kill`) locks inside `shared_child`, which blocks for as long as a stopped helper is waited on.
@@ -130,7 +140,7 @@ impl Backoff {
 
 /// Spawns the helper now and keeps it alive: when it exits, pending requests fail and it is
 /// respawned after a delay that grows while it keeps dying. Requires `app.manage(Ocr::default())` first.
-pub fn start_helper(app: &AppHandle) {
+fn start_helper(app: &AppHandle) {
     let app = app.clone();
     // Spawned here, not in the thread, so `child` is set before the first request can be sent.
     let mut rx = spawn_helper(&app);

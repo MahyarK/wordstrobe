@@ -4,6 +4,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
+import { formatAccelerator, initPlatform, platform, spokenShortcut, type Os, type PlatformInfo } from "./os.ts";
 import {
   LIMITS,
   PLACEMENTS,
@@ -195,19 +196,68 @@ for (const input of radios("voiceMode")) {
   });
 }
 
-const MODIFIERS: [RegExp, string][] = [
-  [/^(ctrl|control)$/i, "⌃"],
-  [/^(alt|option)$/i, "⌥"],
-  [/^shift$/i, "⇧"],
-  [/^(cmd|command|super|meta|cmdorctrl|commandorcontrol)$/i, "⌘"],
-];
+// ---------------------------------------------------------------------------------------------
+// Platform: the shortcut row, and the words that name the machine
 
-/** "Alt+Shift+R" → "⌥⇧R" in the macOS modifier order. */
-function formatHotkey(accelerator: string): string {
-  const parts = accelerator.split("+").map((p) => p.trim()).filter(Boolean);
-  const symbols = MODIFIERS.filter(([re]) => parts.some((p) => re.test(p))).map(([, symbol]) => symbol);
-  const key = parts.find((p) => !MODIFIERS.some(([re]) => re.test(p))) ?? "";
-  return symbols.join("") + (key.length === 1 ? key.toUpperCase() : key);
+const hotkeyKeys = $("hotkey");
+const hotkeyNote = $("hotkey-note");
+const hotkeyNoteText = $("hotkey-note-text");
+const hotkeyCmd = $("hotkey-cmd");
+const hotkeyCopy = $("hotkey-copy");
+let rustPlatform = false; // platform_info has answered: its hotkey label is the registered one
+
+const WAYLAND_NOTE =
+  "Wayland doesn't let apps register global shortcuts. Add a custom shortcut in your desktop's keyboard settings that runs:";
+const TAKEN_NOTE =
+  "Another app is using this shortcut, so Wordstrobe could not register it. Free it there and restart Wordstrobe.";
+
+/** What the shortcut row shows: Rust's label once known (it is the one that was registered), else the stored accelerator. */
+function renderHotkey(): void {
+  const { os, wayland, hotkey } = platform();
+  const label = rustPlatform ? hotkey.label : formatAccelerator(current.hotkeyRegion, os);
+  // One keycap with the glyphs on macOS ("⌥⇧R"), one per key elsewhere ("Alt" "Shift" "R").
+  const caps = os === "macos" ? [label] : label.split("+");
+  hotkeyKeys.replaceChildren(
+    ...caps.map((cap) => {
+      const kbd = document.createElement("kbd");
+      kbd.textContent = cap;
+      return kbd;
+    }),
+  );
+  hotkeyKeys.setAttribute("aria-label", spokenShortcut(label));
+  const broken = rustPlatform && !hotkey.ok;
+  hotkeyKeys.dataset.ok = String(!broken);
+  hotkeyNote.hidden = !broken;
+  hotkeyCmd.hidden = !(broken && wayland);
+  hotkeyNoteText.textContent = broken ? (wayland ? WAYLAND_NOTE : TAKEN_NOTE) : "";
+}
+
+hotkeyCopy.addEventListener("click", async () => {
+  const text = hotkeyCmd.querySelector("code")!.textContent ?? "";
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // The async API can be refused; a hidden textarea and execCommand still works.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.append(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  hotkeyCopy.textContent = "Copied";
+  window.setTimeout(() => (hotkeyCopy.textContent = "Copy"), 1500);
+});
+
+const DEVICE: Record<Os, string> = { macos: "Mac", windows: "PC", linux: "computer" };
+
+function applyPlatform(_info: PlatformInfo, fromRust: boolean): void {
+  rustPlatform ||= fromRust;
+  $("device").textContent = DEVICE[platform().os];
+  renderHotkey();
+  renderVoiceHelp();
 }
 
 // Preview: one sample word with the pivot letter in red, at the chosen size and theme (PLAN §5.2).
@@ -234,7 +284,7 @@ function render(): void {
   for (const input of radios("wordsPerFlash")) input.checked = input.value === String(current.wordsPerFlash);
   for (const input of radios("theme")) input.checked = input.value === current.theme;
   for (const input of radios("voiceMode")) input.checked = input.value === current.voiceMode;
-  $("hotkey").textContent = formatHotkey(current.hotkeyRegion);
+  renderHotkey();
   renderPreview();
   renderVoiceSaved();
 }
@@ -366,10 +416,23 @@ function setVoiceMessage(text: string): void {
   voiceMessage.textContent = text;
 }
 
+const NO_VOICES: Record<Os, string> = {
+  macos: "No voices found. Add voices in System Settings › Accessibility › Spoken Content, then reopen this window.",
+  windows: "No voices found. Add voices in Settings › Time & language › Speech, then reopen this window.",
+  linux: "No voices found. Install speech-dispatcher and a speech engine such as espeak-ng, then restart Wordstrobe.",
+};
+let noVoices = false; // the wait for the engine's voices is over and it listed none
+
+/** The text depends on the OS, which may be settled after the wait is over. */
+function renderVoiceHelp(): void {
+  if (noVoices) setVoiceMessage(NO_VOICES[platform().os]);
+}
+
 /** `getVoices()` is empty until `voiceschanged` fires (also in WKWebView), so poll briefly and keep listening. */
 function loadVoices(): boolean {
   const list = synth?.getVoices() ?? [];
   if (list.length === 0) return false;
+  noVoices = false;
   const signature = list.map((v) => v.voiceURI).join("\n");
   if (signature !== voiceSignature) {
     voiceSignature = signature;
@@ -395,9 +458,8 @@ function initVoices(): void {
       window.clearInterval(timer);
     } else if (Date.now() - started > 4000) {
       window.clearInterval(timer);
-      setVoiceMessage(
-        "No voices found. Add voices in System Settings › Accessibility › Spoken Content, then reopen this window.",
-      );
+      noVoices = true;
+      renderVoiceHelp();
     }
   }, 250);
 }
@@ -410,7 +472,9 @@ const call = <T>(command: string): Promise<T | undefined> => (IN_TAURI ? invoke<
 const dot = $("dot");
 const state = $("state");
 
+/** Screen Recording is a macOS permission: nothing to ask elsewhere (and no such command in Rust). */
 async function refreshPermission(): Promise<void> {
+  if (platform().os !== "macos") return;
   const granted = (await call<boolean>("permission_status")) === true;
   const text = granted ? "Granted" : "Not granted";
   dot.dataset.ok = String(granted);
@@ -442,10 +506,12 @@ async function refresh(): Promise<void> {
   render();
   syncVoiceSelect();
   loadVoices(); // voices may have been installed meanwhile
+  if (IN_TAURI) void initPlatform((command) => invoke(command), applyPlatform); // so may the shortcut have been freed
 }
 
 async function main(): Promise<void> {
   $("demo-note").hidden = IN_TAURI;
+  void initPlatform(IN_TAURI ? (command) => invoke(command) : undefined, applyPlatform); // sets <html data-os> before anything awaits
   kv = await openStore();
   Object.assign(current, await readAll());
   voicesJson = JSON.stringify(current.voices);

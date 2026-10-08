@@ -249,6 +249,57 @@ kbd {
   letter-spacing: 1px;
 }
 
+/* The shortcut as keycaps: one for the macOS glyphs ("⌥⇧R"), one per key elsewhere ("Alt" "Shift" "R"). */
+.keys {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+}
+
+.keys[data-ok="false"] {
+  opacity: 0.45;
+}
+
+/* Where the shortcut cannot work: what to do instead, with the command to bind. */
+.note {
+  background: var(--notice-bg);
+  border-radius: 0 0 9px 9px;
+}
+
+.note[hidden] {
+  display: none;
+}
+
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+}
+
+.cmd[hidden] {
+  display: none;
+}
+
+code {
+  padding: 2px 8px;
+  border: 1px solid var(--ctl-border);
+  border-radius: 6px;
+  background: var(--ctl-bg);
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  user-select: all;
+}
+
+/* macOS-only parts (Screen Recording permission) and the Windows/Linux look. macOS is the base and stays as written. */
+:root:is([data-os="windows"], [data-os="linux"]) [data-only="macos"] {
+  display: none;
+}
+
+:root:is([data-os="windows"], [data-os="linux"]) kbd {
+  letter-spacing: 0;
+  font-size: 12px;
+}
+
 /* Segmented control: native radios, visually replaced (arrow keys and labels keep working) */
 
 .seg {

@@ -1,5 +1,6 @@
 // Read aloud on the Web Speech API (PLAN §6): per-paragraph utterances, word boundaries mapped
 // back to tokens, and a voice speed that calibrates itself while it speaks.
+import { engineFromUserAgent, osFromUserAgent, platform, type Os } from "./os.ts";
 import { BASE_WPM } from "./prefs.ts";
 import { tokenAtChar, type Token } from "./text.ts";
 
@@ -8,33 +9,54 @@ export const DEFAULT_BASE_WPM = 200;
 const MIN_RATE = 0.5;
 const MAX_RATE = 2;
 // PLAN §6 caps the voice at twice its normal speed ("voice capped at N wpm"), the point where it
-// stops being intelligible. Counted in speed, not in `rate`, see CURVE.
+// stops being intelligible. Counted in speed, not in `rate`, see the curves.
 const MAX_SPEEDUP = 2;
 
-// WebKit's `utterance.rate` is nowhere near linear: measured in WKWebView on macOS 26 with
+/** [rate, speed relative to rate 1] points of an engine, piecewise linear in between and flat outside. */
+export type Curve = readonly (readonly [number, number])[];
+
+// Apple's WebKit: `utterance.rate` is nowhere near linear. Measured in WKWebView on macOS 26 with
 // Samantha, Daniel and Anna (28 silent words each), rate 1.5 speaks 2.5x as fast as rate 1 and
 // rate 2 speaks 4.2x as fast, while rate 0.5 only slows down to 0.78x. The three voices agree
-// within 5 %. [rate, speed relative to rate 1], piecewise linear in between.
-// ponytail: other engines (WebView2, speech-dispatcher) get this curve until M7/M8 measure theirs;
-// the calibration below corrects a wrong curve over a few utterances.
-const CURVE: [number, number][] = [
+// within 5 %.
+export const WEBKIT_CURVE: Curve = [
   [0.5, 0.775],
   [1, 1],
   [1.5, 2.55],
   [2, 4.2],
 ];
 
+// Chromium (WebView2) hands `rate` to the voice as its speaking rate, a plain multiplier: 2 is twice
+// as fast. WebKitGTK does the same through speech-dispatcher; the kink above is in Apple's backend.
+// Not measured on either (M7/M8): the calibration below corrects a wrong curve over a few utterances.
+export const LINEAR_CURVE: Curve = [
+  [0.5, 0.5],
+  [1, 1],
+  [2, 2],
+];
+
+/**
+ * The curve of the engine behind `ua`. Apple's WebKit, and anything unrecognised, gets the measured
+ * one; Chromium and WebKitGTK (Linux) the linear one.
+ */
+export function curveFor(ua: string): Curve {
+  const apple = engineFromUserAgent(ua) === "webkit" && osFromUserAgent(ua) === "macos";
+  return apple ? WEBKIT_CURVE : LINEAR_CURVE;
+}
+
+const ACTIVE_CURVE = curveFor(typeof navigator === "undefined" ? "" : navigator.userAgent);
+
 /** Speed of a voice at `rate`, relative to rate 1. */
-export function speedAt(rate: number): number {
-  return interpolate(CURVE, rate, 0, 1);
+export function speedAt(rate: number, curve: Curve = ACTIVE_CURVE): number {
+  return interpolate(curve, rate, 0, 1);
 }
 
 /** The rate that makes a voice `speed` times as fast as at rate 1 (clamped to what the engine allows). */
-export function rateFor(speed: number): number {
-  return interpolate(CURVE, speed, 1, 0);
+export function rateFor(speed: number, curve: Curve = ACTIVE_CURVE): number {
+  return interpolate(curve, speed, 1, 0);
 }
 
-function interpolate(points: [number, number][], x: number, from: 0 | 1, to: 0 | 1): number {
+function interpolate(points: Curve, x: number, from: 0 | 1, to: 0 | 1): number {
   const first = points[0]!;
   const last = points[points.length - 1]!;
   if (x <= first[from]) return first[to];
@@ -86,7 +108,7 @@ if (typeof speechSynthesis !== "undefined") {
  * also what starts the load). Resolves with whatever exists after `timeoutMs`, possibly nothing.
  */
 export function loadVoices(timeoutMs = 2000): Promise<SpeechSynthesisVoice[]> {
-  if (known.length === 0) known = speechSynthesis.getVoices();
+  known = speechSynthesis.getVoices();
   if (known.length > 0) return Promise.resolve(known);
   return new Promise((resolve) => {
     const done = () => {
@@ -98,6 +120,18 @@ export function loadVoices(timeoutMs = 2000): Promise<SpeechSynthesisVoice[]> {
     speechSynthesis.addEventListener("voiceschanged", done);
   });
 }
+
+/** How long an engine that lists no voice yet is given before the UI believes it has none (macOS needs ~2 s for its first load). */
+export const VOICE_GRACE_MS = 4000;
+
+const VOICE_HELP: Record<Os, string> = {
+  macos: "add some under Spoken Content",
+  windows: "add one in Time & language › Speech",
+  linux: "install speech-dispatcher/espeak-ng",
+};
+
+/** Shown instead of speaking (a toast) and as the tooltip of the disabled speaker button. */
+export const noVoicesMessage = (os: Os): string => `No system voices found — ${VOICE_HELP[os]}`;
 
 // WKWebView on macOS lists 68 voices, every one with default = true: the novelty ones (Albert,
 // Bad News, Zarvox, ...) and the robotic Fred/Ralph are the legacy "speech.synthesis.voice"
@@ -143,6 +177,13 @@ export class Speaker {
   voices: Record<string, string> = {};
   baseWpms: Record<string, number> = {};
 
+  /** The engine's rate curve: the one of this webview, unless a test says otherwise. */
+  curve: Curve = ACTIVE_CURVE;
+  /** How long `start` waits for a cold engine to list its voices. */
+  voiceWaitMs = 2000;
+  /** The last `start` found the engine without any voice: no point in trying again until one is installed. */
+  voiceless = false;
+
   voice: SpeechSynthesisVoice | undefined;
   /** Speed of the voice at rate 1, in words per minute. */
   baseWpm = DEFAULT_BASE_WPM;
@@ -177,7 +218,7 @@ export class Speaker {
 
   /** What the listener actually gets. */
   get effectiveWpm(): number {
-    return this.baseWpm * speedAt(this.rate);
+    return this.baseWpm * speedAt(this.rate, this.curve);
   }
 
   /** Speaks from token `from` to the end, one utterance per paragraph. Replaces any current speech. */
@@ -185,8 +226,10 @@ export class Speaker {
     const gen = this.halt();
     this.paused = false;
     if (!this.supported) return this.hooks.error("Read aloud is not available here");
-    const voices = await loadVoices();
+    const voices = await loadVoices(this.voiceWaitMs);
     if (gen !== this.gen) return;
+    this.voiceless = voices.length === 0;
+    if (this.voiceless) return this.hooks.error(noVoicesMessage(platform().os));
 
     this.text = text;
     this.target = wpm;
@@ -241,7 +284,7 @@ export class Speaker {
       return this.hooks.end();
     }
 
-    this.rate = Math.min(MAX_RATE, Math.max(MIN_RATE, rateFor(Math.min(MAX_SPEEDUP, this.target / this.baseWpm))));
+    this.rate = Math.min(MAX_RATE, Math.max(MIN_RATE, rateFor(Math.min(MAX_SPEEDUP, this.target / this.baseWpm), this.curve)));
     const u = new SpeechSynthesisUtterance(text.paragraphs[para]!.slice(from));
     if (this.voice) u.voice = this.voice;
     u.lang = this.voice?.lang ?? text.lang;
@@ -288,6 +331,9 @@ export class Speaker {
       if (gen !== this.gen) return;
       heard();
       if (e.error === "canceled" || e.error === "interrupted") return;
+      // Chromium wants a user gesture before it lets a page speak, and a read that starts by itself has
+      // none. The S key that follows is one (for good), so the voice starts then.
+      if (e.error === "not-allowed") return this.hooks.error("Press S once more to start the voice");
       this.hooks.error(`Speech failed (${e.error})`);
     };
     speechSynthesis.speak(u);
@@ -315,7 +361,7 @@ export class Speaker {
     const s = this.sample;
     this.sample = undefined;
     if (!s || s.n < MIN_SAMPLE_WORDS || s.last - s.t0 < MIN_SAMPLE_MS) return;
-    const estimate = Math.min(BASE_WPM.max, Math.max(BASE_WPM.min, ((s.n - 1) * 60_000) / (s.last - s.t0) / speedAt(this.rate)));
+    const estimate = Math.min(BASE_WPM.max, Math.max(BASE_WPM.min, ((s.n - 1) * 60_000) / (s.last - s.t0) / speedAt(this.rate, this.curve)));
     this.baseWpm = this.calibrated ? this.baseWpm * (1 - SMOOTHING) + estimate * SMOOTHING : estimate;
     this.calibrated = true;
     this.baseWpms[this.key] = Math.round(this.baseWpm);

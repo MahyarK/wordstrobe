@@ -1,0 +1,122 @@
+/* Region overlay (PLAN §11 M6): the frozen screen of one monitor, a slight dim, the drag rectangle.
+   No inline styles anywhere (CSP): JS only sets data-* attributes and the custom properties
+   --x --y --w --h (the rectangle, in CSS px). */
+
+/* Bundled, not fetched: the CSP only allows 'self'. SIL OFL. */
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --red: #ff5a4f; /* the reader's pivot */
+  --fill: rgba(255, 90, 79, 0.1);
+  --dim: rgba(0, 0, 0, 0.28);
+  --pill: rgba(22, 22, 24, 0.86);
+  --edge: rgba(255, 255, 255, 0.11);
+  --fg: #f4f4f6;
+  --muted: rgba(244, 244, 246, 0.56);
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The monitor's pixels, stretched over the viewport: image px = CSS px × image size / viewport size. */
+#shot {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+#dim {
+  position: fixed;
+  inset: 0;
+  background: var(--dim);
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+/* While dragging, the rectangle's shadow dims everything around it instead, so the text inside stays bright. */
+body[data-drag] #dim,
+body[data-drag] #hint {
+  opacity: 0;
+}
+
+#sel {
+  position: fixed;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  width: var(--w);
+  height: var(--h);
+  transform: translate(var(--x), var(--y));
+  background: var(--fill);
+  box-shadow:
+    inset 0 0 0 1px var(--red),
+    0 0 0 100vmax var(--dim);
+  pointer-events: none;
+}
+
+#size {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--pill);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  color: var(--fg);
+  font: 500 11px/1.6 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Out of room below the rectangle: above it, or inside its corner when it fills the screen. */
+#sel[data-v="above"] #size {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
+#sel[data-v="inside"] #size {
+  top: 8px;
+  left: 8px;
+}
+
+#sel[data-h="right"]:not([data-v="inside"]) #size {
+  left: auto;
+  right: 0;
+}
+
+#hint {
+  position: fixed;
+  left: 50%;
+  bottom: 7vh;
+  margin: 0;
+  padding: 5px 14px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: var(--pill);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  color: var(--muted);
+  font: 500 12px/1.6 var(--mono);
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}

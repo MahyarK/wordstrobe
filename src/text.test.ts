@@ -902,3 +902,10 @@ test("pipeline: OCR lines -> paragraphs -> tokens -> schedule", () => {
   assert.equal(d.length, tokens.length);
   assert.ok(d.every((x) => x >= 60000 / 350));
 });
+
+test("cleanup: spaces between Han/kana characters (Windows OCR, Tesseract) are removed", () => {
+  assert.equal(cleanup("你 好 世 界"), "你好世界");
+  assert.equal(cleanup("日 本 語 の 文 章 。"), "日本語の文章。");
+  assert.equal(cleanup("Hello 世界 and 中 文"), "Hello 世界 and 中文");
+  assert.equal(cleanup("안녕 하세요"), "안녕 하세요");
+});

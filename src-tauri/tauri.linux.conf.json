@@ -1,0 +1,13 @@
+{
+  "app": {
+    "security": {
+      "csp": { "img-src": "'self' data: overlay:" }
+    }
+  },
+  "bundle": {
+    "targets": ["deb", "appimage"],
+    "linux": {
+      "deb": { "depends": ["tesseract-ocr", "tesseract-ocr-eng", "libpipewire-0.3-0t64 | libpipewire-0.3-0"] }
+    }
+  }
+}

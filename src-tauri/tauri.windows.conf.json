@@ -1,0 +1,8 @@
+{
+  "app": {
+    "security": {
+      "csp": { "img-src": "'self' data: http://overlay.localhost" }
+    }
+  },
+  "bundle": { "targets": ["nsis"] }
+}

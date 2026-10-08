@@ -3,7 +3,18 @@
 // globalThis is enough to drive a Speaker here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_BASE_WPM, Speaker, pickVoice, rateFor, speedAt } from "./speech.ts";
+import { fallbackInfo, setPlatform } from "./os.ts";
+import {
+  DEFAULT_BASE_WPM,
+  LINEAR_CURVE,
+  Speaker,
+  WEBKIT_CURVE,
+  curveFor,
+  noVoicesMessage,
+  pickVoice,
+  rateFor,
+  speedAt,
+} from "./speech.ts";
 import { tokenize } from "./text.ts";
 
 const approx = (actual: number, expected: number, eps = 1e-6) =>
@@ -34,6 +45,42 @@ test("rateFor inverts speedAt and stays inside the engine's range", () => {
     assert.ok(r >= last);
     last = r;
   }
+});
+
+// What each webview really sends (see os.test.ts).
+const UA = {
+  wkwebview: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+  webview2:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+  webkitgtk: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+  chromeOnMac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+};
+
+test("curveFor: Apple's WebKit (and anything unrecognised) gets the measured curve, Chromium and WebKitGTK the linear one", () => {
+  assert.equal(curveFor(UA.wkwebview), WEBKIT_CURVE);
+  assert.equal(curveFor(""), WEBKIT_CURVE);
+  assert.equal(curveFor("Node.js/22"), WEBKIT_CURVE); // what these tests run on
+  assert.equal(curveFor(UA.webview2), LINEAR_CURVE);
+  assert.equal(curveFor(UA.chromeOnMac), LINEAR_CURVE);
+  assert.equal(curveFor(UA.webkitgtk), LINEAR_CURVE);
+});
+
+test("the linear curve: rate is speed, flat outside the engine's range", () => {
+  for (const r of [0.5, 0.8, 1, 1.25, 1.5, 2]) {
+    approx(speedAt(r, LINEAR_CURVE), r);
+    approx(rateFor(r, LINEAR_CURVE), r);
+  }
+  approx(speedAt(0.1, LINEAR_CURVE), 0.5);
+  approx(speedAt(9, LINEAR_CURVE), 2);
+  approx(rateFor(0.1, LINEAR_CURVE), 0.5);
+  approx(rateFor(99, LINEAR_CURVE), 2);
+});
+
+test("the two curves disagree where it matters: the same speed needs a different rate", () => {
+  approx(rateFor(1.5, LINEAR_CURVE), 1.5);
+  assert.ok(rateFor(1.5, WEBKIT_CURVE) < 1.3); // WebKit speaks 1.62x already at rate 1.2
+  approx(speedAt(2, WEBKIT_CURVE), 4.2);
+  approx(speedAt(2, LINEAR_CURVE), 2);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -135,8 +182,8 @@ function install(voices: SpeechSynthesisVoice[] = [macVoices[2]!]): void {
   };
 }
 
-function setup(paragraphs: string[], base: Record<string, number> = {}) {
-  install();
+function setup(paragraphs: string[], base: Record<string, number> = {}, voices?: SpeechSynthesisVoice[]) {
+  install(voices);
   const tokens = tokenize(paragraphs, "en");
   const log = { words: [] as number[], ends: 0, bases: [] as [string, number][], errors: [] as string[] };
   const speaker = new Speaker({
@@ -344,4 +391,102 @@ test("Speaker: resume() does not arm the watchdog once the voice has spoken", as
   assert.equal(timers.length, 1);
   timers[0]!();
   assert.deepEqual(log.errors, []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Per engine
+// ---------------------------------------------------------------------------------------------
+
+test("Speaker on a Chromium curve: the rate is the speed, and the cap is still twice the base speed", async () => {
+  const uri = "com.apple.voice.compact.en-US.Samantha";
+  const { speaker, text } = setup(["One two three."], { [uri]: 200 });
+  speaker.curve = LINEAR_CURVE;
+  await speaker.start(text, 0, 300); // 1.5x
+  approx(spoken[0]!.rate, 1.5);
+  approx(speaker.effectiveWpm, 300);
+  assert.equal(speaker.capped, false);
+
+  await speaker.start(text, 0, 1000); // far above the cap: 2x the base speed
+  approx(spoken[1]!.rate, 2);
+  assert.equal(speaker.capped, true);
+  approx(speaker.effectiveWpm, 400);
+
+  await speaker.start(text, 0, 100); // below the slowest rate: floor
+  approx(spoken[2]!.rate, 0.5);
+  approx(speaker.effectiveWpm, 100);
+});
+
+test("Speaker on a Chromium curve calibrates the base speed from boundary timing", async () => {
+  const words = Array.from({ length: 20 }, (_, i) => `w${i}`).join(" ");
+  const { speaker, text, log } = setup([words]);
+  speaker.curve = LINEAR_CURVE;
+  const offsets = [...words.matchAll(/\S+/g)].map((m) => m.index!);
+  await speaker.start(text, 0, 200); // guessed base 200: rate 1
+  const per = 60000 / 300; // the voice really speaks 300 wpm at rate 1
+  for (let i = 0; i < 15; i++) boundary(spoken[0]!, offsets[i]!, i === 0 ? 0 : per);
+  assert.equal(log.bases.length, 1);
+  assert.ok(Math.abs(log.bases[0]![1] - 300) <= 3, `base ${log.bases[0]![1]}`);
+});
+
+test("Speaker: a page the browser will not let speak (no user gesture yet) says what to do", async () => {
+  const { speaker, text, log } = setup(["One two."]);
+  await speaker.start(text, 0, 200);
+  spoken[0]!.onerror?.({ error: "not-allowed" });
+  assert.deepEqual(log.errors, ["Press S once more to start the voice"]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// No voices (WebKitGTK without speech-dispatcher, a bare Windows install)
+// ---------------------------------------------------------------------------------------------
+
+test("noVoicesMessage: says what to install, per OS", () => {
+  assert.equal(noVoicesMessage("linux"), "No system voices found — install speech-dispatcher/espeak-ng");
+  assert.match(noVoicesMessage("windows"), /^No system voices found — .*Speech/);
+  assert.match(noVoicesMessage("macos"), /^No system voices found — .*Spoken Content/);
+  for (const os of ["macos", "windows", "linux"] as const) assert.ok(noVoicesMessage(os).length <= 70, os); // fits the popup's footer
+});
+
+test("Speaker: an engine without voices reports it and speaks nothing", async () => {
+  setPlatform(fallbackInfo("linux"));
+  try {
+    const { speaker, text, log } = setup(["One two three."], {}, []);
+    speaker.voiceWaitMs = 0; // do not wait for voiceschanged here
+    assert.equal(speaker.voiceless, false);
+    await speaker.start(text, 0, 200);
+    assert.equal(speaker.voiceless, true);
+    assert.deepEqual(log.errors, ["No system voices found — install speech-dispatcher/espeak-ng"]);
+    assert.equal(spoken.length, 0);
+    assert.equal(log.ends, 0);
+    assert.equal(synthState.cancels, 1, "only the cancel that clears the queue");
+
+    // The same message follows the OS the page runs on
+    setPlatform(fallbackInfo("windows"));
+    await speaker.start(text, 0, 200);
+    assert.equal(log.errors[1], noVoicesMessage("windows"));
+  } finally {
+    setPlatform(fallbackInfo("macos"));
+  }
+});
+
+test("Speaker: voices that show up later clear the flag and speak", async () => {
+  const { speaker, text, log } = setup(["One two three."], {}, []);
+  speaker.voiceWaitMs = 0;
+  await speaker.start(text, 0, 200);
+  assert.equal(speaker.voiceless, true);
+
+  install([macVoices[2]!]); // speech-dispatcher was installed meanwhile
+  await speaker.start(text, 0, 200);
+  assert.equal(speaker.voiceless, false);
+  assert.equal(spoken.length, 1);
+  assert.equal(log.errors.length, 1);
+});
+
+test("Speaker: stop() while it waits for voices still means nothing is reported", async () => {
+  const { speaker, text, log } = setup(["One two three."], {}, []);
+  speaker.voiceWaitMs = 0;
+  const pending = speaker.start(text, 0, 200);
+  speaker.stop();
+  await pending;
+  assert.deepEqual(log.errors, []);
+  assert.equal(speaker.voiceless, false);
 });

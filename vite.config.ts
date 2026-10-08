@@ -12,6 +12,7 @@ export default defineConfig({
       input: {
         reader: resolve(import.meta.dirname, "src/reader.html"),
         settings: resolve(import.meta.dirname, "src/settings.html"),
+        overlay: resolve(import.meta.dirname, "src/overlay.html"),
       },
     },
   },
