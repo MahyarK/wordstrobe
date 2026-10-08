@@ -7,7 +7,7 @@ Read any text on your screen faster. Press a shortcut, drag a box around text li
 and a small popup flashes it one word at a time (Rapid Serial Visual Presentation), with optional
 read-aloud. Everything runs on-device.
 
-**[Download](https://github.com/MahyarK/wordstrobe/releases/latest)** for macOS 15+ (Apple Silicon and Intel), Windows 10/11 (x64) and Linux (x64 `.deb` and AppImage).
+**[Download](https://github.com/MahyarK/wordstrobe/releases/latest)** for macOS 15+ (Apple Silicon and Intel), Windows 10/11 (x64) and Linux (x64 `.deb` and AppImage; Ubuntu 24.04+ or another distribution with glibc 2.39+).
 
 <img alt="Demo: Option-Shift-R, a box is dragged over a paragraph, the popup flashes it word by word, Space pauses on the sentence, and the done screen shows 3 seconds saved" src="docs/readme/demo.gif" width="100%">
 

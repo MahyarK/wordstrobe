@@ -18,8 +18,9 @@ jobs:
             args: --target universal-apple-darwin --bundles dmg
           - os: windows-latest
             args: --bundles nsis
-          # The oldest supported Ubuntu, so the AppImage and .deb run on newer distributions too.
-          - os: ubuntu-22.04
+          # 24.04, not older: xcap's PipeWire bindings don't build against 22.04's PipeWire 0.3.48. The packages
+          # therefore need glibc 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian 13, Arch).
+          - os: ubuntu-24.04
             args: --bundles deb,appimage
     runs-on: ${{ matrix.os }}
     steps:
