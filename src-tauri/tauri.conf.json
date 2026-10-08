@@ -54,6 +54,6 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/wordstrobe-ocr"],
-    "macOS": { "minimumSystemVersion": "15.0" }
+    "macOS": { "minimumSystemVersion": "15.0", "signingIdentity": "-" }
   }
 }
