@@ -1169,6 +1169,7 @@ mod tests {
         assert_eq!(desktop_position("cursor", (5.0, 5.0), SIZE, None, &[]), None);
     }
 
+    #[cfg(unix)] // Unix path semantics: on Windows "/run/user/1000" isn't absolute
     #[test]
     fn linux_captures_go_to_the_per_user_runtime_dir() {
         let tmp = Path::new("/tmp");
