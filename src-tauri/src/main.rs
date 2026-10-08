@@ -365,7 +365,7 @@ fn capture_dir() -> PathBuf {
 }
 
 /// The spec requires `$XDG_RUNTIME_DIR` to be absolute; anything else (unset, empty, relative) is ignored.
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(all(test, unix), target_os = "linux"))]
 fn linux_capture_dir(runtime_dir: Option<PathBuf>, tmp: &Path, uid: u32) -> PathBuf {
     match runtime_dir.filter(|dir| dir.is_absolute()) {
         Some(dir) => dir.join("wordstrobe"),
