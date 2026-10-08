@@ -281,6 +281,16 @@ kbd {
   display: none;
 }
 
+/* An AppImage path is long: the command wraps, the button keeps its size. */
+.cmd code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cmd button {
+  flex: none;
+}
+
 code {
   padding: 2px 8px;
   border: 1px solid var(--ctl-border);

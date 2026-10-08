@@ -135,15 +135,9 @@ const DASH_ONLY = /^\p{Pd}+$/u;
 
 type Fragment = { text: string; dash: boolean };
 
-// Windows OCR and Tesseract put a space between every Han/kana character; Chinese and Japanese don't
-// use spaces, so a space between two of them is removed (Korean, which does use spaces, is untouched).
-const CJK = "\\p{sc=Han}\\p{sc=Hiragana}\\p{sc=Katakana}\\u3000-\\u303F\\uFF00-\\uFFEF";
-const CJK_GAP = new RegExp(`(?<=[${CJK}])[^\\S\\n]+(?=[${CJK}])`, "gu");
-
 export function cleanup(text: string): string {
   const s = text
     .replace(/\r\n?/g, "\n")
-    .replace(CJK_GAP, "")
     .replace(LIGATURES, (c) => c.normalize("NFKC"))
     .replace(/­\s*\n\s*/g, "") // soft hyphen at a line break: join
     .replace(/­/g, "")

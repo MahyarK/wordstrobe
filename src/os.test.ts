@@ -2,10 +2,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  READ_REGION_COMMAND,
+  blockBrowserShortcuts,
   engineFromUserAgent,
   fallbackInfo,
   formatAccelerator,
   initPlatform,
+  isBrowserShortcut,
   keyChord,
   keyHint,
   modifier,
@@ -90,12 +93,13 @@ test("modifier: ⌘ is the command key on macOS, Ctrl elsewhere, and the other o
 });
 
 test("parsePlatformInfo: the contract passes, anything else is undefined, a bad hotkey falls back", () => {
-  const ok = { os: "windows", wayland: false, hotkey: { ok: true, label: "Alt+Shift+R" } };
+  const ok = { os: "windows", wayland: false, hotkey: { ok: true, label: "Alt+Shift+R" }, command: "wordstrobe --read-region" };
   assert.deepEqual(parsePlatformInfo(ok), ok);
-  assert.deepEqual(parsePlatformInfo({ os: "linux", wayland: true, hotkey: { ok: false, label: "Alt+Shift+R" } }), {
+  assert.deepEqual(parsePlatformInfo({ os: "linux", wayland: true, hotkey: { ok: false, label: "Alt+Shift+R" }, command: "/opt/ws.AppImage --read-region" }), {
     os: "linux",
     wayland: true,
     hotkey: { ok: false, label: "Alt+Shift+R" },
+    command: "/opt/ws.AppImage --read-region",
   });
   assert.deepEqual(parsePlatformInfo({ os: "macos", wayland: false, hotkey: { ok: true, label: "⌥⇧R" } })?.hotkey, { ok: true, label: "⌥⇧R" });
   for (const bad of [undefined, null, 7, "linux", [], {}, { os: "beos" }, { os: 1 }]) assert.equal(parsePlatformInfo(bad), undefined, JSON.stringify(bad));
@@ -106,10 +110,99 @@ test("parsePlatformInfo: the contract passes, anything else is undefined, a bad 
   assert.equal(parsePlatformInfo({ os: "linux", wayland: "yes", hotkey: { ok: true, label: "A" } })?.wayland, false);
 });
 
+test("parsePlatformInfo: the command is Rust's (trimmed); without one, an older backend's, it is the plain binary", () => {
+  const info = (command?: unknown) => parsePlatformInfo({ os: "linux", wayland: true, hotkey: { ok: false, label: "Alt+Shift+R" }, command })?.command;
+  assert.equal(info("'/home/me/Apps/Wordstrobe.AppImage' --read-region"), "'/home/me/Apps/Wordstrobe.AppImage' --read-region");
+  assert.equal(info("  wordstrobe --read-region \n"), "wordstrobe --read-region");
+  for (const bad of [undefined, null, "", "   ", 7, {}, ["x"]]) assert.equal(info(bad), READ_REGION_COMMAND, JSON.stringify(bad));
+  assert.equal(READ_REGION_COMMAND, "wordstrobe --read-region");
+});
+
 test("fallbackInfo: the stored accelerator in the OS's words, no Wayland", () => {
-  assert.deepEqual(fallbackInfo("macos"), { os: "macos", wayland: false, hotkey: { ok: true, label: "⌥⇧R" } });
-  assert.deepEqual(fallbackInfo("linux"), { os: "linux", wayland: false, hotkey: { ok: true, label: "Alt+Shift+R" } });
+  assert.deepEqual(fallbackInfo("macos"), { os: "macos", wayland: false, hotkey: { ok: true, label: "⌥⇧R" }, command: READ_REGION_COMMAND });
+  assert.deepEqual(fallbackInfo("linux"), { os: "linux", wayland: false, hotkey: { ok: true, label: "Alt+Shift+R" }, command: READ_REGION_COMMAND });
   assert.equal(fallbackInfo("windows", "Ctrl+K").hotkey.label, "Ctrl+K");
+});
+
+// A key event as the webview delivers it (CDP and the browsers agree on key/code).
+const ev = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}, code?: string) => ({
+  key,
+  code: code ?? (key.length === 1 ? (/\d/.test(key) ? `Digit${key}` : `Key${key.toUpperCase()}`) : key),
+  ctrlKey: false,
+  altKey: false,
+  shiftKey: false,
+  metaKey: false,
+  ...mods,
+});
+const ctrl = { ctrlKey: true };
+
+test("isBrowserShortcut: reload, print, find, view source and friends are the browser's, with or without Shift", () => {
+  for (const os of ["windows", "linux"] as const) {
+    for (const key of ["F5", "F3", "F7"]) {
+      assert.ok(isBrowserShortcut(os, ev(key)), `${os} ${key}`);
+      assert.ok(isBrowserShortcut(os, ev(key, { shiftKey: true })), `${os} Shift+${key}`);
+      assert.ok(isBrowserShortcut(os, ev(key, ctrl)), `${os} Ctrl+${key}`);
+    }
+    for (const letter of "fghjoprsu") {
+      assert.ok(isBrowserShortcut(os, ev(letter, ctrl)), `${os} Ctrl+${letter}`);
+      assert.ok(isBrowserShortcut(os, ev(letter.toUpperCase(), { ctrlKey: true, shiftKey: true })), `${os} Ctrl+Shift+${letter}`);
+    }
+  }
+});
+
+test("isBrowserShortcut: the app's keys and text editing are not", () => {
+  for (const os of ["windows", "linux"] as const) {
+    for (const k of [ev("c", ctrl), ev("C", { ctrlKey: true, shiftKey: true }), ev(",", ctrl, "Comma"), ev("a", ctrl), ev("v", ctrl), ev("x", ctrl), ev("z", ctrl)]) {
+      assert.ok(!isBrowserShortcut(os, k), `${os} ${k.key}`);
+    }
+    for (const k of [ev(" "), ev("r"), ev("p"), ev("s"), ev("f"), ev("u"), ev("Escape"), ev("F1"), ev("F4"), ev("ArrowLeft", { altKey: true }), ev("1"), ev("5")]) {
+      assert.ok(!isBrowserShortcut(os, k), `${os} ${k.key} alone`); // the reader's own R, S, 1-3 stay
+    }
+    assert.ok(!isBrowserShortcut(os, ev("p", { ctrlKey: true, altKey: true })), `${os} AltGr+P types a character`);
+    assert.ok(!isBrowserShortcut(os, ev("r", { metaKey: true })), `${os} Win+R is the OS's`);
+  }
+});
+
+test("isBrowserShortcut: on a non-Latin layout the physical key counts, like the browser's own", () => {
+  assert.ok(isBrowserShortcut("windows", ev("к", ctrl, "KeyR"))); // Russian: Ctrl+К still reloads
+  assert.ok(isBrowserShortcut("linux", ev("з", { ctrlKey: true, shiftKey: true }, "KeyP")));
+  assert.ok(!isBrowserShortcut("windows", ev("с", ctrl, "KeyC")));
+  assert.ok(!isBrowserShortcut("windows", ev("Dead", ctrl, "BracketLeft")));
+});
+
+test("isBrowserShortcut: nothing on macOS", () => {
+  for (const k of [ev("F5"), ev("r", { metaKey: true }), ev("p", { metaKey: true }), ev("r", ctrl), ev("F3")]) assert.ok(!isBrowserShortcut("macos", k), k.key);
+});
+
+test("blockBrowserShortcuts: a packaged build cancels the default action of browser keys, nothing else", () => {
+  const g = globalThis as Record<string, unknown>;
+  const listeners: { type: string; fn: (e: unknown) => void; capture: unknown }[] = [];
+  g.addEventListener = (type: string, fn: (e: unknown) => void, capture: unknown) => listeners.push({ type, fn, capture });
+  const press = (k: ReturnType<typeof ev>) => {
+    let prevented = false;
+    for (const l of listeners) l.fn({ ...k, preventDefault: () => (prevented = true) });
+    return prevented;
+  };
+  try {
+    blockBrowserShortcuts(false); // a dev build keeps reload and DevTools
+    assert.equal(listeners.length, 0);
+
+    blockBrowserShortcuts(true);
+    assert.deepEqual(listeners.map((l) => [l.type, l.capture]), [["keydown", true]]);
+    setPlatform(fallbackInfo("windows"));
+    assert.ok(press(ev("F5")));
+    assert.ok(press(ev("R", { ctrlKey: true, shiftKey: true })));
+    assert.ok(press(ev("p", ctrl)));
+    assert.ok(!press(ev(" ")));
+    assert.ok(!press(ev("c", ctrl)));
+    assert.ok(!press(ev(",", ctrl, "Comma")));
+    setPlatform(fallbackInfo("macos")); // the OS Rust reports decides, not the user agent
+    assert.ok(!press(ev("F5")));
+    assert.ok(!press(ev("r", { metaKey: true })));
+  } finally {
+    delete g.addEventListener;
+    setPlatform(fallbackInfo("macos"));
+  }
 });
 
 test("initPlatform: the user agent's OS first (data-os set), then Rust's answer", async () => {
@@ -119,7 +212,7 @@ test("initPlatform: the user agent's OS first (data-os set), then Rust's answer"
   try {
     const seen: [PlatformInfo, boolean][] = [];
     setPlatform(fallbackInfo("windows"));
-    const answer = { os: "linux", wayland: true, hotkey: { ok: false, label: "Alt+Shift+R" } };
+    const answer = { os: "linux", wayland: true, hotkey: { ok: false, label: "Alt+Shift+R" }, command: "/opt/ws.AppImage --read-region" };
     await initPlatform(async (cmd) => (cmd === "platform_info" ? answer : undefined), (i, fromRust) => {
       seen.push([i, fromRust]);
       // data-os already has the value this call is about

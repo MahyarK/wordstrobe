@@ -4,8 +4,17 @@
 > shows one word at a time (Rapid Serial Visual Presentation), with optional read-aloud.
 > macOS first; Windows and Linux follow without a rewrite.
 
-Status: **planning**. Every number in this document marked *measured* comes from the
-experiments in [`spikes/`](spikes) on an Apple M3 Pro, macOS 26.6, Xcode 27.
+Status: **v0.2: macOS, Windows and Linux.** Every number in this document marked *measured*
+comes from the experiments in [`spikes/`](spikes) on an Apple M3 Pro, macOS 26.6, Xcode 27, unless
+it says otherwise.
+
+| Milestone | State |
+|---|---|
+| M0–M3: capture → OCR → reader, read-aloud (macOS) | done (v0.1) |
+| M6: shared region overlay | done for Windows and Linux X11; magnifier, "Read Last Region Again" and the macOS overlay setting are open |
+| M7: Windows | done: Windows.Media.Ocr, overlay, Web Speech in WebView2 |
+| M8: Linux | done: Tesseract, the overlay on X11, the Screenshot portal on Wayland; read-aloud and Wayland global shortcuts are open (§12) |
+| M4: signed, notarized v1.0, M5: more inputs | open |
 
 ---
 
@@ -342,7 +351,7 @@ only), `store`, `single-instance` (M0–M2), `autostart`, `updater`, `process` (
 ### M1 — Capture → OCR · 2 d
 - Global hotkey ⌥⇧R with a busy guard.
 - Permission preflight plus the Settings › Permissions panel (request, deep link, relaunch).
-- Capture with `screencapture -i -x` into `$TMPDIR/wordstrobe/` (mode 0700). A missing file means cancelled. The file is always deleted after OCR.
+- Capture with `screencapture -i -x` into `$TMPDIR/wordstrobe/` (Linux: `$XDG_RUNTIME_DIR/wordstrobe/`) (mode 0700). A missing file means cancelled. The file is always deleted after OCR.
 - `wordstrobe-ocr` helper:
   - JSON-lines loop.
   - Documents path (26+) and text path (15–25).
@@ -383,7 +392,26 @@ only), `store`, `single-instance` (M0–M2), `autostart`, `updater`, `process` (
 - macOS keeps `screencapture -i` by default (setting: "System picker / Built-in overlay").
 
 ### M7 — Windows · 3–4 d · M8 — Linux · 4–5 d
-See §12.
+See §12. Built in v0.2. What it took, and what is still open:
+- **Seam:** one `platform/<os>.rs` per OS behind the contract in `main.rs`. Per-OS `tauri.<os>.conf.json` files
+  (macOS keeps the Swift sidecar and vibrancy; Windows and Linux get an opaque, undecorated reader).
+- **Overlay:** the frozen frames are served to the overlay pages as BMP over a custom scheme. *Measured* on a
+  3600×2338 frame: BMP 5.6 ms to encode + 60 ms to decode, against 50 + 115 ms for a fast PNG.
+- **Windows:** Windows.Media.Ocr in-process (`windows` crate). In CI, OCR on the fixture took 63 ms. It needs an
+  OCR language installed (most desktops have one for their display language).
+- **Linux:** the Tesseract CLI with `OMP_THREAD_LIMIT=1` (*measured* in Docker: 1.5 s → 0.35 s for a
+  1600×1000 page). Tight paragraph crops read at 99–100 %. Wide full-page captures at ≤ 14 px read at 91–97 %,
+  and a 2× upscale before OCR fixes them (99.8 %, +250 ms). That upscale is open.
+- **Open on Linux:**
+  - **Read-aloud:** WebKitGTK has no `speechSynthesis` at all (checked on 2.52.6), so it needs a native
+    speech-dispatcher path with SSML index marks feeding the same word events.
+  - **Wayland global shortcuts:** the GlobalShortcuts portal. Today users bind a desktop shortcut to
+    `wordstrobe --read-region`, and Settings shows the exact command.
+  - **wlroots desktops (sway, river):** a grim + slurp fallback, because `xdg-desktop-portal-wlr` ignores
+    interactive selection.
+- **Verified by CI** on every push: macOS, Ubuntu 24.04 (clippy, tests, an Xvfb end-to-end run with Tesseract)
+  and Windows (clippy, tests including real OCR, an end-to-end run). A `v*` tag builds the DMG, the NSIS installer,
+  the `.deb` and the AppImage into a draft release.
 
 ### M9+ — Smart features
 See §13.
@@ -443,7 +471,7 @@ The shared TypeScript (`text.ts`, the reader, settings) doesn't change. Each por
 ## 15. Privacy & security
 
 - **On-device only.** Vision OCR and system voices. The only network call is the update check, which can be switched off. No analytics.
-- **Captures** go to `$TMPDIR/wordstrobe/` (0700) and are deleted right after OCR, including on errors. They're never logged. Text lives in memory unless history is switched on (opt-in, local).
+- **Captures** go to `$TMPDIR/wordstrobe/` (Linux: `$XDG_RUNTIME_DIR/wordstrobe/`) (0700) and are deleted right after OCR, including on errors. They're never logged. Text lives in memory unless history is switched on (opt-in, local).
 - **Tauri capabilities, least privilege per window:**
   - The reader gets event listen, hide/drag, clipboard write, and store read.
   - Settings gets store read/write, global shortcuts, and autostart.

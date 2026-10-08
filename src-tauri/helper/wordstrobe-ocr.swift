@@ -84,7 +84,10 @@ func bandRows(_ height: Int) -> [Range<Int>] {
     return (0..<n).map { let top = $0 * (h - bandOverlap); return top..<min(top + h, height) }
 }
 
-/// Bands are read concurrently. A line belongs to the band whose own region (the band minus half the overlap at each seam)
+/// Bands are read one after another. ponytail: concurrently was ~2.4x faster for tall images, but concurrent Vision
+/// requests hung on GitHub's 3-core macOS VMs (likely starving Swift's cooperative pool, sized to the core count),
+/// and a low-core Mac would hang the same way; bounded concurrency is the upgrade if tall captures get common.
+/// A line belongs to the band whose own region (the band minus half the overlap at each seam)
 /// holds its centre, so every line is read once, away from a band edge, with no text to compare. A paragraph that
 /// began above a band's region continues the paragraph the previous band left in the same column.
 func readBands(_ image: CGImage, languages: [Locale.Language], fast: Bool, documents: Bool) async throws -> Ocr {
@@ -94,12 +97,8 @@ func readBands(_ image: CGImage, languages: [Locale.Language], fast: Bool, docum
         guard let band = image.cropping(to: CGRect(x: 0, y: r.lowerBound, width: image.width, height: r.count)) else { throw Failure("cannot crop image") }
         return band
     }
-    let parts = try await withThrowingTaskGroup(of: (Int, Ocr).self) { group in
-        for (i, band) in bands.enumerated() {
-            group.addTask { (i, try await recognizeOnce(band, languages: languages, fast: fast, documents: documents)) }
-        }
-        return try await group.reduce(into: [Ocr](repeating: Ocr(), count: bands.count)) { $0[$1.0] = $1.1 }
-    }
+    var parts: [Ocr] = []
+    for band in bands { parts.append(try await recognizeOnce(band, languages: languages, fast: fast, documents: documents)) }
     var ocr = Ocr()
     for (i, r) in rows.enumerated() {
         let top = Double(r.lowerBound) / height, span = Double(r.count) / height
@@ -215,12 +214,22 @@ func language(of texts: [String]) -> String {
 }
 
 /// `documents: false` forces the text path on macOS 26+ (the selftest compares both).
+/// Languages Vision's fast level reads (Latin script); the wide-image fallback only runs for these.
+let fastLanguages: Set<String> = ["en", "de", "fr", "es", "it", "pt", "nl", "sv", "da", "no", "nb", "fi", "pl", "cs", "ro", "tr", "id", "vi"]
+
 func recognize(_ source: CGImage, langs: [String], fast: Bool, documents: Bool = true) async throws -> Ocr {
+    // `.fast` with automatic language detection never returns when Swift's cooperative pool is small (measured:
+    // it hangs with LIBDISPATCH_COOPERATIVE_POOL_STRICT=1, which hung CI's 3-core macOS VMs intermittently), while
+    // pinned `.fast`, `.accurate` and documents requests are fine. So `.fast` always gets a language.
     let languages = langs.map { Locale.Language(identifier: $0) }  // empty = auto-detect
     let image = framed(source), wide = !fast && image.width > wideMin
-    async let quick = wide ? try? await readBands(image, languages: languages, fast: true, documents: false) : nil
-    var ocr = try await readBands(image, languages: languages, fast: fast, documents: documents)
-    if let quick = await quick, quick.characters * 100 > ocr.characters * 125 { ocr = quick }
+    var ocr = try await readBands(image, languages: fast && languages.isEmpty ? [Locale.Language(identifier: "en-US")] : languages,
+                                  fast: fast, documents: documents)
+    // After, not alongside, the accurate pass (see `readBands`), pinned to the language that pass detected.
+    let detected = language(of: ocr.texts)
+    if wide, fastLanguages.contains(String(detected.prefix(2))),
+       let quick = try? await readBands(image, languages: [Locale.Language(identifier: detected)], fast: true, documents: false),
+       quick.characters * 100 > ocr.characters * 125 { ocr = quick }
     // back to the unframed image
     let sx = Double(image.width) / Double(image.width - 2 * margin), sy = Double(image.height) / Double(image.height - 2 * margin)
     let ox = Double(margin) / Double(image.width - 2 * margin), oy = Double(margin) / Double(image.height - 2 * margin)
@@ -400,7 +409,24 @@ let minAccuracy = 0.98
 /// Cases that genuinely cannot reach `minAccuracy`, keyed by "<lang> <size>px <polarity>".
 let relaxedAccuracy: [String: Double] = [:]
 
+/// The last row printed and when, for the watchdog: a hung Vision request would otherwise keep CI waiting for hours.
+nonisolated(unsafe) var progress = (at: Date(), after: "the start")
+
+/// Exits (status 3) naming the last finished case when no case finishes for `limit` seconds.
+func startWatchdog(limit: TimeInterval = 120) {
+    Thread {
+        while true {
+            Thread.sleep(forTimeInterval: 5)
+            if Date().timeIntervalSince(progress.at) > limit {
+                FileHandle.standardError.write(Data("selftest: no progress for \(Int(limit)) s after \(progress.after)\n".utf8))
+                exit(3)
+            }
+        }
+    }.start()
+}
+
 func table(_ name: String, _ path: String, _ score: Double, _ elapsed: Int, pass: Bool = true) {
+    progress = (Date(), "\(name) \(path)")
     print(name.padding(toLength: 28, withPad: " ", startingAt: 0) + path.padding(toLength: 7, withPad: " ", startingAt: 0)
           + String(format: "%7.3f  %5d", score, elapsed) + (pass ? "" : "  FAIL"))
 }
@@ -408,6 +434,8 @@ func table(_ name: String, _ path: String, _ score: Double, _ elapsed: Int, pass
 /// docs and text (accurate) use automatic language detection and must reach `minAccuracy`.
 /// fast is informational: it needs the language pinned and only supports Latin scripts.
 func selftest() async -> Bool {
+    setvbuf(stdout, nil, _IOLBF, 0) // rows show up in CI logs as they finish, not at exit
+    startWatchdog()
     await warmUp()
     print("case".padding(toLength: 28, withPad: " ", startingAt: 0) + "path   accuracy     ms")
     var failures = 0

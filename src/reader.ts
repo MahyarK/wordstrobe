@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { initPlatform, keyChord, keyHint, modifier, platform, type PlatformInfo } from "./os.ts";
+import { blockBrowserShortcuts, initPlatform, keyChord, keyHint, modifier, platform, type PlatformInfo } from "./os.ts";
 import { Player } from "./player.ts";
 import { DEFAULTS, LIMITS, normalize, readPrefs, type Prefs } from "./prefs.ts";
 import { Speaker, VOICE_GRACE_MS, loadVoices, noVoicesMessage } from "./speech.ts";
@@ -767,8 +767,10 @@ function onKey(e: KeyboardEvent): void {
     else if (keyName(e) === "c") void copyAll();
     else {
       // A packaged Windows/Linux webview has browser shortcuts that a popup must not trigger: Ctrl+R
-      // would reload it and lose the text, Ctrl+P would print it. (Dev builds keep their DevTools.)
-      if (os !== "macos" && import.meta.env.PROD && !e.shiftKey) e.preventDefault();
+      // would reload it and lose the text, Ctrl+P would print it. No other Ctrl chord means anything
+      // here, and `blockBrowserShortcuts` cancels the keys that are not chords. (Dev builds keep
+      // their DevTools.)
+      if (os !== "macos" && import.meta.env.PROD) e.preventDefault();
       return;
     }
     e.preventDefault();
@@ -810,6 +812,7 @@ function onKey(e: KeyboardEvent): void {
 }
 
 addEventListener("keydown", onKey);
+blockBrowserShortcuts(import.meta.env.PROD); // F5, F3 and F7 are no Ctrl chords for the check in onKey
 
 // The context menu of a Windows/Linux webview (Back, Reload, Inspect) is browser furniture in a popup.
 addEventListener("contextmenu", (e) => {

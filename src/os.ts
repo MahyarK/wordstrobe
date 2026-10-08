@@ -3,11 +3,11 @@
 //
 // The user agent answers first, synchronously, so that the first paint already has the right look;
 // Rust's `platform_info` then settles it (and adds what the user agent cannot know: whether the
-// hotkey could be registered, whether this is Wayland). Without that command (a browser, an older
-// build) the user agent stays the answer.
+// hotkey could be registered, whether this is Wayland, which command starts a region read). Without
+// that command (a browser, an older build) the user agent stays the answer.
 //
-// DOM-free apart from the `data-os` attribute, and erasable TypeScript only: it runs under
-// `node --test` as well.
+// DOM-free apart from the `data-os` attribute and one key listener, and erasable TypeScript only: it
+// runs under `node --test` as well.
 import { DEFAULTS } from "./prefs.ts";
 
 export type Os = "macos" | "windows" | "linux";
@@ -20,7 +20,12 @@ export type PlatformInfo = {
   wayland: boolean;
   /** The region shortcut: whether Rust could register it, and its label, already formatted for the OS. */
   hotkey: { ok: boolean; label: string };
+  /** The full command that a desktop shortcut (Wayland) has to run to start a region read. */
+  command: string;
 };
+
+/** The command when Rust does not say: right for an installed binary on the PATH, wrong for an AppImage. */
+export const READ_REGION_COMMAND = "wordstrobe --read-region";
 
 export const osFromUserAgent = (ua: string): Os =>
   /Windows NT/i.test(ua) ? "windows" : /Linux|X11/.test(ua) ? "linux" : "macos";
@@ -79,13 +84,42 @@ export function modifier(os: Os, e: Mods): "command" | "other" | "none" {
   return e.ctrlKey ? "command" : "none";
 }
 
+type KeyEventLike = Mods & { key: string; code: string };
+
+/**
+ * A key the browser underneath handles by itself, which a popup or an overlay must not pass on: reload
+ * (F5, Ctrl+R, Ctrl+Shift+R), print (Ctrl+P), find (Ctrl+F, Ctrl+G, F3), caret browsing (F7), view
+ * source (Ctrl+U), save, open, history and downloads (Ctrl+S, O, H, J). Shift makes no difference.
+ * WebView2 leaves all of these on and Tauri does not turn them off; WebKitGTK has none of its own, but
+ * the answer is the same there. macOS has none either. The letter is the one the key stands for, as
+ * the browser reads it: the printed one on a Latin layout, the physical key on any other.
+ */
+export function isBrowserShortcut(os: Os, e: KeyEventLike): boolean {
+  if (os === "macos") return false;
+  if (/^F(3|5|7)$/.test(e.key)) return true;
+  if (modifier(os, e) !== "command") return false;
+  const letter = /^[a-z]$/i.test(e.key) ? e.key : (/^Key([A-Z])$/.exec(e.code)?.[1] ?? "");
+  return /^[fghjoprsu]$/i.test(letter);
+}
+
+/**
+ * Once at startup of each page: in a packaged build (`packaged` is Vite's `import.meta.env.PROD`),
+ * stops the browser's own shortcuts (`isBrowserShortcut`) from doing anything. The page's own keys are
+ * not touched: this only cancels the default action, other listeners still see the event. A dev build
+ * keeps them, for reloading and for DevTools.
+ */
+export function blockBrowserShortcuts(packaged: boolean): void {
+  if (!packaged || typeof addEventListener === "undefined") return;
+  addEventListener("keydown", (e) => isBrowserShortcut(platform().os, e) && e.preventDefault(), true);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Platform info
 // ---------------------------------------------------------------------------------------------
 
 /** What is known without asking Rust: the user agent's OS, the default hotkey, no Wayland. */
 export function fallbackInfo(os: Os, accelerator: string = DEFAULTS.hotkeyRegion): PlatformInfo {
-  return { os, wayland: false, hotkey: { ok: true, label: formatAccelerator(accelerator, os) } };
+  return { os, wayland: false, hotkey: { ok: true, label: formatAccelerator(accelerator, os) }, command: READ_REGION_COMMAND };
 }
 
 /** Rust's answer, checked: anything that is not the contract is `undefined` (and the user agent stays). */
@@ -98,7 +132,8 @@ export function parsePlatformInfo(raw: unknown): PlatformInfo | undefined {
     typeof hk === "object" && hk !== null && typeof hk.ok === "boolean" && typeof hk.label === "string" && hk.label !== ""
       ? { ok: hk.ok, label: hk.label }
       : fallbackInfo(r.os).hotkey;
-  return { os: r.os, wayland: r.wayland === true, hotkey };
+  const command = typeof r.command === "string" && r.command.trim() !== "" ? r.command.trim() : READ_REGION_COMMAND;
+  return { os: r.os, wayland: r.wayland === true, hotkey, command };
 }
 
 let info: PlatformInfo = fallbackInfo(osFromUserAgent(typeof navigator === "undefined" ? "" : navigator.userAgent));

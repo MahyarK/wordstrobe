@@ -21,6 +21,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, WebviewWindow};
 
+use crate::words::join_words;
+
 /// Tesseract needs a few hundred ms for a screenful, so this only guards against a hung process.
 const OCR_TIMEOUT: Duration = Duration::from_secs(60);
 /// A portal screenshot older than this was not made by our request, so it is left alone.
@@ -515,37 +517,6 @@ fn parse_tsv(tsv: &str, fallback_size: Option<(u32, u32)>) -> Result<Vec<Line>, 
         .collect())
 }
 
-/// Words joined by spaces, except between two characters of a script that is written without
-/// spaces: Tesseract's Chinese, Japanese and Thai models put a gap between every character.
-fn join_words(words: &[String]) -> String {
-    let mut text = String::new();
-    for word in words {
-        let glued = text.chars().next_back().zip(word.chars().next()).is_some_and(
-            |(a, b)| is_unspaced_script(a) && is_unspaced_script(b),
-        );
-        if !text.is_empty() && !glued {
-            text.push(' ');
-        }
-        text.push_str(word);
-    }
-    text
-}
-
-fn is_unspaced_script(c: char) -> bool {
-    matches!(c as u32,
-        0x0E00..=0x0EFF   // Thai, Lao
-        | 0x1000..=0x109F // Myanmar
-        | 0x1780..=0x17FF // Khmer
-        | 0x3000..=0x30FF // CJK punctuation, Hiragana, Katakana
-        | 0x31F0..=0x31FF // Katakana extensions
-        | 0x3400..=0x4DBF // CJK extension A
-        | 0x4E00..=0x9FFF // CJK unified ideographs
-        | 0xF900..=0xFAFF // CJK compatibility ideographs
-        | 0xFF00..=0xFFEF // fullwidth forms
-        | 0x20000..=0x2FA1F // CJK extensions B-F, compatibility supplement
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,14 +599,6 @@ mod tests {
         assert!(parse_tsv(tsv, None).is_err());
         let lines = parse_tsv(tsv, Some((1000, 500))).unwrap();
         assert_eq!((lines[0].x, lines[0].y, lines[0].w, lines[0].h), (0.1, 0.2, 0.1, 0.1));
-    }
-
-    #[test]
-    fn cjk_characters_are_not_split_by_spaces() {
-        let words: Vec<String> = ["你", "好", "世", "界", "Hello", "world", "こ", "ん"]
-            .map(String::from)
-            .into();
-        assert_eq!(join_words(&words), "你好世界 Hello world こん");
     }
 
     #[test]

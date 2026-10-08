@@ -27,7 +27,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: scripts/build-helper.sh
+      # Prints each case as it finishes; its watchdog exits with the stuck case's name after 2 min without progress.
       - run: src-tauri/binaries/wordstrobe-ocr-*-apple-darwin --selftest
+        timeout-minutes: 8
       # Tauri's build script embeds ../dist, so the frontend has to exist before clippy.
       - run: npm run build
       - uses: dtolnay/rust-toolchain@stable

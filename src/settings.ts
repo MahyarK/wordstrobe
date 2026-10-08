@@ -4,7 +4,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
-import { formatAccelerator, initPlatform, platform, spokenShortcut, type Os, type PlatformInfo } from "./os.ts";
+import { blockBrowserShortcuts, formatAccelerator, initPlatform, platform, spokenShortcut, type Os, type PlatformInfo } from "./os.ts";
 import {
   LIMITS,
   PLACEMENTS,
@@ -203,6 +203,7 @@ const hotkeyKeys = $("hotkey");
 const hotkeyNote = $("hotkey-note");
 const hotkeyNoteText = $("hotkey-note-text");
 const hotkeyCmd = $("hotkey-cmd");
+const hotkeyCmdText = $("hotkey-cmd-text");
 const hotkeyCopy = $("hotkey-copy");
 let rustPlatform = false; // platform_info has answered: its hotkey label is the registered one
 
@@ -213,7 +214,7 @@ const TAKEN_NOTE =
 
 /** What the shortcut row shows: Rust's label once known (it is the one that was registered), else the stored accelerator. */
 function renderHotkey(): void {
-  const { os, wayland, hotkey } = platform();
+  const { os, wayland, hotkey, command } = platform();
   const label = rustPlatform ? hotkey.label : formatAccelerator(current.hotkeyRegion, os);
   // One keycap with the glyphs on macOS ("⌥⇧R"), one per key elsewhere ("Alt" "Shift" "R").
   const caps = os === "macos" ? [label] : label.split("+");
@@ -229,11 +230,12 @@ function renderHotkey(): void {
   hotkeyKeys.dataset.ok = String(!broken);
   hotkeyNote.hidden = !broken;
   hotkeyCmd.hidden = !(broken && wayland);
+  hotkeyCmdText.textContent = command;
   hotkeyNoteText.textContent = broken ? (wayland ? WAYLAND_NOTE : TAKEN_NOTE) : "";
 }
 
 hotkeyCopy.addEventListener("click", async () => {
-  const text = hotkeyCmd.querySelector("code")!.textContent ?? "";
+  const text = hotkeyCmdText.textContent ?? "";
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -510,6 +512,7 @@ async function refresh(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  blockBrowserShortcuts(import.meta.env.PROD); // no reload, print or find dialog over the window in a packaged build
   $("demo-note").hidden = IN_TAURI;
   void initPlatform(IN_TAURI ? (command) => invoke(command) : undefined, applyPlatform); // sets <html data-os> before anything awaits
   kv = await openStore();

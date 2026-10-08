@@ -903,9 +903,9 @@ test("pipeline: OCR lines -> paragraphs -> tokens -> schedule", () => {
   assert.ok(d.every((x) => x >= 60000 / 350));
 });
 
-test("cleanup: spaces between Han/kana characters (Windows OCR, Tesseract) are removed", () => {
-  assert.equal(cleanup("你 好 世 界"), "你好世界");
-  assert.equal(cleanup("日 本 語 の 文 章 。"), "日本語の文章。");
-  assert.equal(cleanup("Hello 世界 and 中 文"), "Hello 世界 and 中文");
-  assert.equal(cleanup("안녕 하세요"), "안녕 하세요");
+test("cleanup: leaves the spaces between CJK characters alone (macOS Vision output is already right)", () => {
+  assert.equal(cleanup("山田 太郎"), "山田 太郎"); // a Japanese name: family name, space, given name
+  assert.equal(cleanup("你 好"), "你 好");
+  assert.equal(cleanup("ＡＢＣ ＤＥＦ"), "ＡＢＣ ＤＥＦ"); // fullwidth Latin
+  assert.equal(cleanup("日本語　の文章"), "日本語 の文章"); // U+3000 is whitespace like any other: one plain space
 });

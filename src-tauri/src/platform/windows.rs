@@ -2,6 +2,7 @@
 //! in-process via the `windows` crate. It reads with the OCR languages installed for the user
 //! profile (Windows 10+). Region selection is the shared overlay (`crate::overlay`).
 //!
+//! Each line's text is built from its words (`crate::words`), not taken from `OcrLine::Text`.
 //! Left out: `OcrResult::TextAngle` (rotated text is read as the engine reports it) and any
 //! confidence, which WinRT OCR doesn't have (`c` is always 1.0).
 
@@ -26,6 +27,8 @@ use windows::{
         WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
     },
 };
+
+use crate::words::join_words;
 
 const NO_LANGUAGE: &str = "No OCR language is installed. Add one in Settings → Time & language → \
 Language & region (a language with \"Optical character recognition\").";
@@ -157,15 +160,18 @@ fn recognize(engine: &OcrEngine, bitmap: &SoftwareBitmap) -> WinResult<Vec<Value
     let round = |v: f64| (v * 1e5).round() / 1e5;
     let mut lines = Vec::new();
     for line in engine.RecognizeAsync(bitmap)?.join()?.Lines()? {
-        let text = line.Text()?.to_string();
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        let mut words = Vec::new();
         for word in line.Words()? {
+            words.push(word.Text()?.to_string());
             let r = word.BoundingRect()?;
             x0 = x0.min(norm(r.X, width));
             y0 = y0.min(norm(r.Y, height));
             x1 = x1.max(norm(r.X + r.Width, width));
             y1 = y1.max(norm(r.Y + r.Height, height));
         }
+        // Not `OcrLine::Text`: it puts a space between the characters of Chinese and Japanese too.
+        let text = join_words(&words);
         if text.trim().is_empty() || x0 > x1 {
             continue;
         }

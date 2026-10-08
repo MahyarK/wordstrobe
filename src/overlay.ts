@@ -5,6 +5,7 @@
 // Nothing here touches the clipboard, the DOM from outside, or the network: the frame comes from the
 // app's own `overlay` URI scheme. Rust shows the window only after `overlay_ready`.
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { blockBrowserShortcuts } from "./os.ts";
 
 /** A drag smaller than this (CSS px, either side) is a click, not a selection. */
 const MIN = 4;
@@ -83,6 +84,7 @@ addEventListener("pointerup", (e) => {
 
 addEventListener("pointercancel", reset);
 addEventListener("keydown", (e) => e.key === "Escape" && finish(null));
+blockBrowserShortcuts(import.meta.env.PROD); // a reload or a print dialog over the frozen screen would strand the user
 addEventListener("contextmenu", (e) => {
   e.preventDefault();
   finish(null);

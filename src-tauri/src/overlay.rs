@@ -21,7 +21,7 @@ use tauri::{
     http::{header, Request, Response, StatusCode},
     window::Color,
     AppHandle, Manager, PhysicalPosition, PhysicalSize, State, UriSchemeContext, UriSchemeResponder,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
 };
 use xcap::{
     image::{
@@ -52,7 +52,8 @@ struct Frame {
 enum Event {
     /// The page of this monitor has its frame decoded.
     Ready(usize),
-    /// A selection, or `None` = cancelled (Esc, right click, or a page that could not load).
+    /// A selection, or `None` = cancelled (Esc, right click, a page that could not load, or the
+    /// window being closed by the OS).
     Done(Option<Selection>),
 }
 
@@ -133,13 +134,14 @@ pub fn select_region(app: &AppHandle, path: &Path) -> Result<bool, String> {
     eprintln!("wordstrobe: overlay: captured {} monitor(s) in {} ms", frames.len(), started.elapsed().as_millis());
 
     let (events, inbox) = mpsc::channel();
-    *app.state::<Overlay>().session() = Some(Session { frames: frames.clone(), events });
+    *app.state::<Overlay>().session() =
+        Some(Session { frames: frames.clone(), events: events.clone() });
     let cleanup = Cleanup(app);
 
     let windows = rects
         .iter()
         .enumerate()
-        .map(|(i, &rect)| open_window(app, i, rect))
+        .map(|(i, &rect)| open_window(app, i, rect, &events))
         .collect::<Result<Vec<_>, _>>()?;
     wait_until_loaded(&inbox, windows.len())?;
     eprintln!("wordstrobe: overlay: shown after {} ms", started.elapsed().as_millis());
@@ -216,7 +218,14 @@ fn capture(monitor: &Monitor) -> Result<(Px, Frame), String> {
 }
 
 /// A hidden window on `rect` whose page loads frame `index`. It is shown once every page is ready.
-fn open_window(app: &AppHandle, index: usize, rect: Px) -> Result<WebviewWindow, String> {
+/// When the OS closes it (Alt+F4, the window manager's close) the selection ends as cancelled:
+/// nobody else would end it, and the other monitors would stay covered until the timeout.
+fn open_window(
+    app: &AppHandle,
+    index: usize,
+    rect: Px,
+    events: &mpsc::Sender<Event>,
+) -> Result<WebviewWindow, String> {
     let url = WebviewUrl::App(format!("overlay.html?m={index}").into());
     // WebView2 windows that share a user-data folder need identical browser arguments, or creating
     // them fails: take the ones of the configured windows (tauri.conf.json). Windows only.
@@ -244,7 +253,20 @@ fn open_window(app: &AppHandle, index: usize, rect: Px) -> Result<WebviewWindow,
         let _ = window.set_size(PhysicalSize::new(w, h));
     }
     let _ = window.set_resizable(false);
+    // Bound to this selection's own channel, not to whatever session is current: the `Destroyed` of
+    // a window that `Cleanup` closed must never cancel the next selection.
+    let events = events.clone();
+    window.on_window_event(move |event| {
+        if ends_selection(event) {
+            let _ = events.send(Event::Done(None));
+        }
+    });
     Ok(window)
+}
+
+/// The OS asked to close the overlay window, or it is gone already.
+fn ends_selection(event: &WindowEvent) -> bool {
+    matches!(event, WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed)
 }
 
 fn wait_until_loaded(inbox: &Receiver<Event>, pages: usize) -> Result<(), String> {
@@ -281,4 +303,25 @@ fn write_png(path: &Path, rgb: &[u8], (w, h): (u32, u32)) -> Result<(), String> 
             let _ = fs::remove_file(path); // no half-written capture is left behind
             format!("cannot encode the selection: {e}")
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_window_ends_the_selection_but_focus_and_moves_do_not() {
+        assert!(ends_selection(&WindowEvent::Destroyed));
+        assert!(!ends_selection(&WindowEvent::Focused(false)));
+        assert!(!ends_selection(&WindowEvent::Moved(PhysicalPosition::new(0, 0))));
+        assert!(!ends_selection(&WindowEvent::Resized(PhysicalSize::new(1, 1))));
+    }
+
+    #[test]
+    fn a_cancel_from_the_close_handler_wakes_the_waiting_selection() {
+        let (events, inbox) = mpsc::channel();
+        events.send(Event::Ready(0)).unwrap();
+        events.send(Event::Done(None)).unwrap();
+        assert_eq!(wait_for_selection(&inbox), None);
+    }
 }

@@ -1,3 +1,8 @@
+// A release build on Windows is a GUI program: without this the NSIS-installed exe opens a console
+// window on every launch, and closing that window kills the app. Debug builds keep the console, which
+// is where the CI end-to-end run reads stderr.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Wordstrobe: tray, global hotkey and the read flow (PLAN §3, §4). All OS-specific work sits
 //! behind the platform seam: one file per OS in `platform/`, selected below, exporting exactly these
 //! free functions. There is no trait because a build never has more than one implementation.
@@ -25,6 +30,9 @@ mod platform;
 
 #[cfg(not(target_os = "macos"))]
 mod overlay;
+// Joining the words of an OCR line (Windows and Linux); also built for tests, so they run on macOS.
+#[cfg(any(test, not(target_os = "macos")))]
+mod words;
 // The overlay's pure geometry builds everywhere, so its tests also run on macOS.
 #[cfg(any(test, not(target_os = "macos")))]
 mod region;
@@ -45,7 +53,8 @@ use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, Position,
+    WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
@@ -86,8 +95,9 @@ fn setting(app: &AppHandle, key: &str) -> Option<String> {
     app.store(STORE).ok()?.get(key)?.as_str().map(str::to_owned)
 }
 
-/// A monitor as Tauri reports it. Positions and sizes are physical: points × this monitor's *own*
-/// scale, so on mixed-DPI setups they are not comparable between monitors until divided by it.
+/// A monitor as Tauri reports it, physical px. On Windows and Linux X11 they are px of the virtual
+/// desktop, comparable between monitors. On macOS they are points × this monitor's *own* scale, so on
+/// mixed-DPI setups they are not comparable between monitors until divided by it.
 #[derive(Clone, Copy)]
 struct Screen {
     position: (i32, i32),
@@ -119,21 +129,28 @@ impl Screen {
         )
     }
 
-    /// The whole monitor, in global points.
+    /// The whole monitor, in global points (macOS).
     fn frame(&self) -> Rect {
         self.points(self.position, self.size)
     }
 
-    /// Below the menu bar and beside the Dock, in global points.
+    /// Below the menu bar and beside the Dock, in global points (macOS).
     fn work_area(&self) -> Rect {
         self.points(self.work_position, self.work_size)
     }
+
+    /// Whether `point` (physical px of the virtual desktop) is on this monitor.
+    fn contains_px(&self, (x, y): (f64, f64)) -> bool {
+        let span = |start: i32, len: u32| f64::from(start)..f64::from(start) + f64::from(len);
+        span(self.position.0, self.size.0).contains(&x)
+            && span(self.position.1, self.size.1).contains(&y)
+    }
 }
 
-/// The cursor in global points and the work area (also points) of the screen it is on. `cursor_px`
-/// is what tao reports on macOS: physical px of the *primary* screen, so its scale gives points that
-/// compare with every screen's frame (also with other scales). Outside every screen it is the
-/// primary one, or else the first.
+/// macOS: the cursor in global points and the work area (also points) of the screen it is on.
+/// `cursor_px` is what tao reports there: physical px of the *primary* screen, so its scale gives
+/// points that compare with every screen's frame (also with other scales). Outside every screen it
+/// is the primary one, or else the first.
 fn locate(
     cursor_px: (f64, f64),
     primary: Option<&Screen>,
@@ -164,8 +181,47 @@ fn position_in(mode: &str, cursor: (f64, f64), size: (f64, f64), area: Rect) -> 
     }
 }
 
-/// Where the reader goes, in logical points, or `None` to leave it where it is.
-fn reader_position(app: &AppHandle, reader: &WebviewWindow) -> Option<(f64, f64)> {
+/// Windows and Linux X11: tao reports the cursor and every monitor in physical px of the virtual
+/// desktop, and each monitor has its own scale. So the monitor under the cursor is found in physical
+/// px, the popup is placed in that monitor's own logical space (`size` is logical), and the result is
+/// converted back to physical px of the desktop, which is what `set_position(Physical)` takes. Outside
+/// every monitor it is the primary one, or else the first.
+fn desktop_position(
+    mode: &str,
+    cursor_px: (f64, f64),
+    size: (f64, f64),
+    primary: Option<&Screen>,
+    screens: &[Screen],
+) -> Option<(i32, i32)> {
+    let screen = screens
+        .iter()
+        .find(|s| s.contains_px(cursor_px))
+        .or(primary)
+        .or(screens.first())?;
+    let (ox, oy) = (f64::from(screen.position.0), f64::from(screen.position.1));
+    let scale = screen.scale;
+    // Physical px of the desktop -> logical px from this monitor's top-left corner.
+    let logical = |(x, y): (f64, f64)| ((x - ox) / scale, (y - oy) / scale);
+    let (wx, wy) = logical((
+        f64::from(screen.work_position.0),
+        f64::from(screen.work_position.1),
+    ));
+    let area = (
+        wx,
+        wy,
+        f64::from(screen.work_size.0) / scale,
+        f64::from(screen.work_size.1) / scale,
+    );
+    let (x, y) = position_in(mode, logical(cursor_px), size, area);
+    Some((
+        (ox + x * scale).round() as i32,
+        (oy + y * scale).round() as i32,
+    ))
+}
+
+/// Where the reader goes, or `None` to leave it where it is: logical points on macOS (the global
+/// points model), physical desktop px elsewhere (see `desktop_position`).
+fn reader_position(app: &AppHandle, reader: &WebviewWindow) -> Option<Position> {
     let mode = setting(app, "placement").unwrap_or_else(|| "cursor".into());
     if mode == "last" {
         return None;
@@ -175,10 +231,9 @@ fn reader_position(app: &AppHandle, reader: &WebviewWindow) -> Option<(f64, f64)
         .outer_size()
         .ok()?
         .to_logical::<f64>(reader.scale_factor().ok()?);
-    // ponytail: this is macOS math (tao reports the cursor in physical px of the *primary* monitor and
-    // every monitor in points of its own scale). It is exact for Windows/Linux desktops whose monitors
-    // share one scale factor; mixed-DPI ones need the same in physical px, converted per target monitor.
+    let size = (size.width, size.height);
     let cursor = app.cursor_position().ok()?;
+    let cursor = (cursor.x, cursor.y);
     let primary = app.primary_monitor().ok()?.map(|m| Screen::new(&m));
     let screens: Vec<Screen> = app
         .available_monitors()
@@ -186,8 +241,14 @@ fn reader_position(app: &AppHandle, reader: &WebviewWindow) -> Option<(f64, f64)
         .iter()
         .map(Screen::new)
         .collect();
-    let (cursor, area) = locate((cursor.x, cursor.y), primary.as_ref(), &screens)?;
-    Some(position_in(&mode, cursor, (size.width, size.height), area))
+    if cfg!(target_os = "macos") {
+        let (cursor, area) = locate(cursor, primary.as_ref(), &screens)?;
+        let (x, y) = position_in(&mode, cursor, size, area);
+        Some(LogicalPosition::new(x, y).into())
+    } else {
+        let (x, y) = desktop_position(&mode, cursor, size, primary.as_ref(), &screens)?;
+        Some(PhysicalPosition::new(x, y).into())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -285,8 +346,31 @@ impl Drop for Busy {
     }
 }
 
+/// Where captures live, always inside a directory only this user can enter (see `private_dir`).
+/// macOS: `$TMPDIR` is per user already. Windows: so is `%TEMP%`.
+#[cfg(not(target_os = "linux"))]
 fn capture_dir() -> PathBuf {
     std::env::temp_dir().join("wordstrobe")
+}
+
+/// Linux: `/tmp` is shared, and another user who creates `/tmp/wordstrobe` first would make
+/// `private_dir` refuse it for good. So it is `$XDG_RUNTIME_DIR` (per user, mode 0700 by the XDG
+/// spec) or else a directory named after the uid.
+#[cfg(target_os = "linux")]
+fn capture_dir() -> PathBuf {
+    // SAFETY: no arguments, cannot fail.
+    let uid = unsafe { libc::geteuid() };
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    linux_capture_dir(runtime_dir, &std::env::temp_dir(), uid)
+}
+
+/// The spec requires `$XDG_RUNTIME_DIR` to be absolute; anything else (unset, empty, relative) is ignored.
+#[cfg(any(test, target_os = "linux"))]
+fn linux_capture_dir(runtime_dir: Option<PathBuf>, tmp: &Path, uid: u32) -> PathBuf {
+    match runtime_dir.filter(|dir| dir.is_absolute()) {
+        Some(dir) => dir.join("wordstrobe"),
+        None => tmp.join(format!("wordstrobe-{uid}")),
+    }
 }
 
 /// `file`: the `--read-image` test entry (debug builds only), which skips the capture and leaves the file alone.
@@ -314,7 +398,9 @@ fn read(app: &AppHandle, file: Option<PathBuf>) {
                 Ok(Some((path, mouse_up))) => (path, "region", mouse_up),
                 Ok(None) => return, // Esc: cancelled, stay silent
                 Err(e) => {
+                    // stderr is invisible in an installed app: the user sees this like an OCR error.
                     eprintln!("wordstrobe: capture failed: {e}");
+                    open_reader(app, json!({ "state": "error", "message": e }));
                     return;
                 }
             }
@@ -324,7 +410,7 @@ fn read(app: &AppHandle, file: Option<PathBuf>) {
     // The request goes out first; showing the popup (it may wait for the page and makes main-thread
     // round trips) runs next to the OCR instead of before it.
     let (result, ocr_ms) = std::thread::scope(|scope| {
-        let ui = scope.spawn(|| open_reader(app));
+        let ui = scope.spawn(|| open_reader(app, json!({ "state": "ocr" })));
         let started = Instant::now();
         let result = platform::ocr(app, &path);
         let ocr_ms = started.elapsed().as_millis();
@@ -384,7 +470,7 @@ fn log_text(_source: &str, _payload: &Value) -> String {
     String::new()
 }
 
-/// `$TMPDIR/wordstrobe` must be a real directory of ours that nobody else can enter. `create` alone
+/// The capture directory must be a real directory of ours that nobody else can enter. `create` alone
 /// is not enough: when the path already exists it keeps its owner and mode, and a symlink is followed.
 #[cfg(unix)]
 fn private_dir(dir: &Path) -> Result<(), String> {
@@ -456,9 +542,10 @@ fn emit(app: &AppHandle, event: &str, payload: Value) {
     let _ = app.emit_to("reader", event, payload);
 }
 
-/// Announces the OCR to the reader (which resets itself on that status) and then shows it. The
-/// status always comes first, so a show never exposes the previous text.
-fn open_reader(app: &AppHandle) {
+/// Announces `status` (`reader:status`: `ocr` while reading, or `error` with its message) to the
+/// reader, which resets itself on any status, and then shows it. The status always comes first, so a
+/// show never exposes the previous text.
+fn open_reader(app: &AppHandle, status: Value) {
     let Some(reader) = app.get_webview_window("reader") else {
         return;
     };
@@ -466,9 +553,9 @@ fn open_reader(app: &AppHandle) {
     if !wait_reader_ready(Duration::from_secs(3)) {
         eprintln!("wordstrobe: reader did not report ready within 3 s, showing it anyway");
     }
-    emit(app, "reader:status", json!({ "state": "ocr" }));
-    if let Some((x, y)) = reader_position(app, &reader) {
-        let _ = reader.set_position(LogicalPosition::new(x, y));
+    emit(app, "reader:status", status);
+    if let Some(position) = reader_position(app, &reader) {
+        let _ = reader.set_position(position);
     }
     let _ = reader.show();
     let _ = reader.set_focus();
@@ -530,15 +617,41 @@ async fn open_privacy_settings() {
     platform::open_privacy_settings();
 }
 
-/// What the UI needs to know about the OS: `{ os: "macos" | "windows" | "linux", wayland, hotkey: { ok, label } }`.
+/// What the UI needs to know about the OS:
+/// `{ os: "macos" | "windows" | "linux", wayland, hotkey: { ok, label }, command }`.
 /// `ok`: whether the hotkey configured at launch is registered (the tray shows the same `label`).
+/// `command`: what a desktop shortcut must run to start a capture (see `shortcut_command`).
 #[tauri::command]
 fn platform_info(app: AppHandle) -> Value {
     json!({
         "os": std::env::consts::OS,
         "wayland": platform::is_wayland(),
         "hotkey": { "ok": HOTKEY_OK.load(Ordering::Acquire), "label": hotkey_label(&app) },
+        "command": read_region_command(),
     })
+}
+
+/// The command a desktop shortcut runs (on Wayland, where no app can grab a hotkey): this program
+/// with `--read-region`. A running instance takes the capture over, see `second_launch`.
+fn read_region_command() -> String {
+    // Inside an AppImage `current_exe` is a temporary mount that is gone after the next start; the
+    // file the user runs is `$APPIMAGE`.
+    let appimage = std::env::var("APPIMAGE").ok().filter(|_| cfg!(target_os = "linux"));
+    let exe = std::env::current_exe().ok();
+    shortcut_command(appimage.as_deref(), exe.as_deref().and_then(Path::to_str))
+}
+
+fn shortcut_command(appimage: Option<&str>, exe: Option<&str>) -> String {
+    let program = appimage
+        .filter(|path| !path.is_empty())
+        .or(exe)
+        .unwrap_or("wordstrobe");
+    // Shortcut dialogs split the command at spaces.
+    if program.contains(char::is_whitespace) {
+        format!("\"{program}\" --read-region")
+    } else {
+        format!("{program} --read-region")
+    }
 }
 
 #[tauri::command]
@@ -937,6 +1050,154 @@ mod tests {
             position_in("cursor", cursor, SIZE, area),
             place(cursor, SIZE, area)
         );
+    }
+
+    // A 150 % laptop (2880×1800 px, 60 px taskbar) with a 100 % external monitor to its right
+    // (1920×1080, 40 px taskbar), as tao reports them on Windows: physical px of the virtual desktop.
+    // The cursor at (3500, 500) is on the external monitor; the macOS math (divide by the primary's
+    // scale) would turn it into (2333, 333), which is on no monitor at all.
+    fn laptop() -> Screen {
+        Screen {
+            position: (0, 0),
+            size: (2880, 1800),
+            scale: 1.5,
+            work_position: (0, 0),
+            work_size: (2880, 1740),
+        }
+    }
+
+    fn external_right() -> Screen {
+        Screen {
+            position: (2880, 0),
+            size: (1920, 1080),
+            scale: 1.0,
+            work_position: (2880, 0),
+            work_size: (1920, 1040),
+        }
+    }
+
+    /// 1920×1080 at 100 % to the left of the laptop, lower than it.
+    fn external_left() -> Screen {
+        Screen {
+            position: (-1920, 120),
+            size: (1920, 1080),
+            scale: 1.0,
+            work_position: (-1920, 120),
+            work_size: (1920, 1040),
+        }
+    }
+
+    /// 2560×1440 at 125 % to the left of the laptop and higher than it (negative y as well).
+    fn external_left_125() -> Screen {
+        Screen {
+            position: (-2560, -200),
+            size: (2560, 1440),
+            scale: 1.25,
+            work_position: (-2560, -200),
+            work_size: (2560, 1400),
+        }
+    }
+
+    fn on_desktop(mode: &str, cursor: (f64, f64), screens: &[Screen]) -> Option<(i32, i32)> {
+        desktop_position(mode, cursor, SIZE, screens.first(), screens)
+    }
+
+    #[test]
+    fn windows_cursor_on_a_100_percent_monitor_next_to_a_150_percent_primary() {
+        let screens = [laptop(), external_right()];
+        // 620 × 500 logical px into the external monitor: x centered (360), y 24 below the cursor.
+        assert_eq!(on_desktop("cursor", (3500.0, 500.0), &screens), Some((2880 + 360, 524)));
+        // Near its bottom edge the popup flips above the cursor, in that monitor's own px.
+        assert_eq!(on_desktop("cursor", (3500.0, 1030.0), &screens), Some((3240, 1030 - 24 - 190)));
+        // Clamped by the monitor's right edge (4800 - 520 - 8), not the laptop's scale.
+        assert_eq!(on_desktop("cursor", (4790.0, 500.0), &screens), Some((4800 - 520 - 8, 524)));
+    }
+
+    #[test]
+    fn windows_cursor_on_the_150_percent_primary_places_in_its_logical_space() {
+        // 1000 × 600 logical px in: x 740, y 624 logical = (1110, 936) physical.
+        assert_eq!(
+            on_desktop("cursor", (1500.0, 900.0), &[laptop(), external_right()]),
+            Some((1110, 936))
+        );
+    }
+
+    #[test]
+    fn windows_monitors_left_of_the_primary_have_negative_origins() {
+        let screens = [laptop(), external_left()];
+        // 920 × 180 logical px into the left monitor (at y = 120): x 660, y 204.
+        assert_eq!(on_desktop("cursor", (-1000.0, 300.0), &screens), Some((-1920 + 660, 120 + 204)));
+        // 125 %: the cursor is 1968 × 240 logical px in; x is clamped (2048 - 520 - 8 = 1520),
+        // y is 24 below the cursor (264); both go back through the 1.25 scale.
+        assert_eq!(
+            on_desktop("cursor", (-100.0, 100.0), &[laptop(), external_left_125()]),
+            Some((-2560 + 1900, -200 + 330))
+        );
+    }
+
+    #[test]
+    fn windows_center_mode_centers_in_the_work_area_of_the_cursor_monitor() {
+        let screens = [laptop(), external_right()];
+        // (1920 - 520) / 2 = 700, (1040 - 190) / 2 = 425
+        assert_eq!(on_desktop("center", (3500.0, 500.0), &screens), Some((2880 + 700, 425)));
+        // The laptop: (1920 - 520) / 2 = 700 and (1160 - 190) / 2 = 485 logical px, at 1.5.
+        assert_eq!(on_desktop("center", (100.0, 100.0), &screens), Some((1050, 728)));
+    }
+
+    #[test]
+    fn windows_monitor_seams_belong_to_the_right_hand_monitor() {
+        let (laptop, external) = (laptop(), external_right());
+        assert!(laptop.contains_px((2879.5, 500.0)) && !external.contains_px((2879.5, 500.0)));
+        assert!(!laptop.contains_px((2880.0, 500.0)) && external.contains_px((2880.0, 500.0)));
+        assert!(external.contains_px((4799.5, 1079.5)) && !external.contains_px((4800.0, 500.0)));
+        assert!(!external.contains_px((3000.0, 1080.0)));
+    }
+
+    #[test]
+    fn windows_cursor_outside_every_monitor_falls_back_to_the_primary() {
+        // Below the external monitor (it ends at y = 1080) and right of the laptop: 2000 × 1000 logical
+        // px on the laptop, so x is clamped to 1392 and y flips above the cursor (786).
+        let screens = [laptop(), external_right()];
+        assert_eq!(on_desktop("cursor", (3000.0, 1500.0), &screens), Some((2088, 1179)));
+    }
+
+    #[test]
+    fn without_a_primary_the_first_monitor_is_used_and_without_monitors_there_is_no_answer() {
+        let screens = [external_right(), laptop()];
+        let first = desktop_position("cursor", (-5.0, -5.0), SIZE, None, &screens);
+        assert_eq!(first, Some((2880 + 8, 19))); // x held back by the margin, y 24 below the cursor
+        assert_eq!(desktop_position("cursor", (5.0, 5.0), SIZE, None, &[]), None);
+    }
+
+    #[test]
+    fn linux_captures_go_to_the_per_user_runtime_dir() {
+        let tmp = Path::new("/tmp");
+        let dir = |runtime: Option<&str>| linux_capture_dir(runtime.map(PathBuf::from), tmp, 1000);
+        assert_eq!(dir(Some("/run/user/1000")), Path::new("/run/user/1000/wordstrobe"));
+        // Unset, empty or relative: the shared temp dir, but under a name that only this user shares.
+        assert_eq!(dir(None), Path::new("/tmp/wordstrobe-1000"));
+        assert_eq!(dir(Some("")), Path::new("/tmp/wordstrobe-1000"));
+        assert_eq!(dir(Some("run/user/1000")), Path::new("/tmp/wordstrobe-1000"));
+    }
+
+    #[test]
+    fn the_shortcut_command_prefers_the_appimage_and_quotes_spaces() {
+        let exe = Some("/usr/bin/wordstrobe");
+        assert_eq!(shortcut_command(None, exe), "/usr/bin/wordstrobe --read-region");
+        assert_eq!(
+            shortcut_command(Some("/home/me/Apps/Wordstrobe.AppImage"), Some("/tmp/.mount_x/usr/bin/wordstrobe")),
+            "/home/me/Apps/Wordstrobe.AppImage --read-region"
+        );
+        assert_eq!(shortcut_command(Some(""), exe), "/usr/bin/wordstrobe --read-region");
+        assert_eq!(
+            shortcut_command(None, Some(r"C:\Program Files\Wordstrobe\wordstrobe.exe")),
+            r#""C:\Program Files\Wordstrobe\wordstrobe.exe" --read-region"#
+        );
+        assert_eq!(
+            shortcut_command(Some("/home/me/My Apps/W.AppImage"), exe),
+            r#""/home/me/My Apps/W.AppImage" --read-region"#
+        );
+        assert_eq!(shortcut_command(None, None), "wordstrobe --read-region");
     }
 
     #[test]
