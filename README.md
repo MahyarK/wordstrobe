@@ -76,5 +76,8 @@ swiftc -O -o /tmp/webspeech spikes/webspeech_boundary.swift && /tmp/webspeech
 
 ## README visuals
 
-`node docs/readme/hero.mjs` regenerates the animated banner (`hero-dark.svg`, `hero-light.svg`). `demo.gif` is a
-screencast of the real reader page in headless Chrome, encoded with ffmpeg.
+`node docs/readme/hero.mjs` regenerates the animated banner (`hero-dark.svg`, `hero-light.svg`).
+
+`node docs/readme/demo.mjs` re-records `demo.gif` after UI changes. It records the real reader page in headless
+Chrome, inside the scene and settings from `demo-scene.js`, then encodes it with ffmpeg. It needs Google Chrome
+(or `CHROME=/path/to/chrome`) and ffmpeg, and starts Vite itself if it isn't running.
