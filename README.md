@@ -66,6 +66,11 @@ appears near the cursor and starts after a short delay. Esc cancels the selectio
 | ⌘C / Ctrl+C | copy the text | ⌘, / Ctrl+, | settings |
 | Esc | close | | |
 
+Read aloud speaks with your system's voices, picked by the language of the text. A language without one (Persian
+on macOS, for instance) needs a voice downloaded first: **System Settings → Accessibility → Spoken Content → System
+voice → Manage Voices** on macOS, **Settings → Time & language → Speech** on Windows. macOS doesn't show downloaded
+voices in Wordstrobe's voice list, but uses one for a language that has no built-in voice.
+
 ## Build
 
 Rust and Node 22.18 or later on every platform, plus:

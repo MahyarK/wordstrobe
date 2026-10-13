@@ -442,7 +442,12 @@ function loadVoices(): boolean {
     buildVoiceOptions();
   }
   voiceSelect.disabled = false;
-  setVoiceMessage(`${list.length} voices installed.`);
+  // WKWebView lists only the voices macOS ships with (speech.ts): say so, or a downloaded one looks missing.
+  setVoiceMessage(
+    platform().os === "macos"
+      ? `${list.length} built-in voices. macOS does not list voices you downloaded: one is used automatically for a language without a voice here.`
+      : `${list.length} voices installed.`,
+  );
   return true;
 }
 

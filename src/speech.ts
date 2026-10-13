@@ -78,7 +78,13 @@ const RETUNE = 0.15;
 // A voice that is listed but not installed accepts speak() and then says nothing, with no error.
 const START_TIMEOUT_MS = 5000;
 
-export type SpeechText = { paragraphs: string[]; tokens: Token[]; lang: string };
+/**
+ * `systemVoice`: the OS has a voice for `lang`, listed by the engine or not. WKWebView lists only the
+ * voices macOS ships with, never one the user downloaded (all there is for Persian, and every Enhanced
+ * or Premium one), but an utterance that names a language and no voice is spoken with the system's
+ * voice for that language. Measured on macOS 26: Persian with `lang = "fa"` runs at Dariush's pace.
+ */
+export type SpeechText = { paragraphs: string[]; tokens: Token[]; lang: string; systemVoice?: boolean };
 
 export type SpeakerHooks = {
   /** A word is being spoken: index into `tokens`. */
@@ -253,8 +259,11 @@ export class Speaker {
 
     this.text = text;
     this.target = wpm;
-    this.voice = pickVoice(text.lang, voices, this.voices);
-    if (!this.voice) return this.hooks.error(noVoiceMessage(text.lang, platform().os));
+    const listed = pickVoice(text.lang, voices, this.voices);
+    const own = listed !== undefined && langPrefix(listed.lang) === langPrefix(text.lang || "en");
+    // The system's own voice for the language beats a stand-in: no voice then, the utterance's `lang` picks it.
+    this.voice = own || !text.systemVoice ? listed : undefined;
+    if (!this.voice && !text.systemVoice) return this.hooks.error(noVoiceMessage(text.lang, platform().os));
     this.key = this.voice?.voiceURI ?? `default:${langPrefix(text.lang)}`;
     this.calibrated = this.baseWpms[this.key] !== undefined;
     this.baseWpm = this.baseWpms[this.key] ?? DEFAULT_BASE_WPM;

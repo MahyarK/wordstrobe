@@ -6,6 +6,7 @@
 //
 // `wordstrobe-ocr --selftest` renders known passages and checks OCR accuracy through the same
 // `recognize` and `respond` functions. Build with scripts/build-helper.sh (needs the macOS 26 SDK, runs on 15+).
+import AVFAudio
 import CoreText
 import Foundation
 import ImageIO
@@ -288,7 +289,9 @@ func respond(_ text: String) async -> [String: Any] {
     do {
         let ocr = try await recognize(try loadImage(path), langs: request["langs"] as? [String] ?? [],
                                       fast: request["fast"] as? Bool ?? false)
-        var response: [String: Any] = ["id": id, "lang": ocr.lang]
+        // "voice": macOS speaks this language. The webview cannot tell: WebKit lists only the voices macOS ships with,
+        // not the ones the user downloaded (all there is for Persian), yet speaks with those when asked for the language.
+        var response: [String: Any] = ["id": id, "lang": ocr.lang, "voice": AVSpeechSynthesisVoice(language: ocr.lang) != nil]
         if let paragraphs = ocr.paragraphs {
             response["paragraphs"] = paragraphs.map(\.text)
             response["tables"] = ocr.tables
@@ -367,6 +370,7 @@ func halfCut(_ page: Layout, top: Bool, visible: Double) -> CGImage {
 func warmUp() async {
     do { _ = try await recognize(render("Warm up the reader now.", size: 14, fontName: nil, dark: false), langs: [], fast: false) }
     catch { warn("pre-warm failed: \(error.localizedDescription)") }
+    _ = AVSpeechSynthesisVoice(language: "en")  // the first lookup loads the voice list (40 ms), later ones take under 1 ms
 }
 
 // MARK: - --selftest
@@ -564,7 +568,7 @@ func selftest() async -> Bool {
     for (passage, lang) in zip(passages, ["en", "de", "zh-Hans"]) {
         id += 1
         let r = await request(render(passage.text, size: 14, fontName: passage.font, dark: false), id: id, langs: [], fast: false)
-        expect(r["id"] as? Int == id && r["lang"] as? String == lang && r["error"] == nil && r["ms"] is Int,
+        expect(r["id"] as? Int == id && r["lang"] as? String == lang && r["voice"] is Bool && r["error"] == nil && r["ms"] is Int,
                "protocol \(passage.name): id/lang/ms in \(r.keys.sorted()), lang=\(r["lang"] ?? "nil") want \(lang)")
         expect((r["paragraphs"] as? [String])?.isEmpty == false || (r["lines"] as? [[String: Any]])?.isEmpty == false, "protocol \(passage.name): no text")
     }

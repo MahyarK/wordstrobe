@@ -489,6 +489,25 @@ test("Speaker: a language no installed voice can read is named, and nothing is s
   assert.equal(speaker.voiceless, false, "the engine has voices: the speaker button stays");
 });
 
+test("Speaker: a voice the engine does not list is asked for by language alone", async () => {
+  const majed = voice("Majed", "ar-001", "com.apple.voice.compact.ar-001.Maged");
+  const { speaker, text, log } = setup(["سلام به همه"], {}, [...macVoices, majed]);
+  await speaker.start({ ...text, lang: "fa", systemVoice: true }, 0, 200);
+  assert.deepEqual(log.errors, []);
+  assert.equal(spoken.length, 1);
+  assert.equal(spoken[0]!.voice, undefined, "not the Arabic voice, not the default one");
+  assert.equal(spoken[0]!.lang, "fa");
+
+  // The same for a language the default voice could stand in for: the system's own voice is better.
+  await speaker.start({ ...text, lang: "sv", systemVoice: true }, 0, 200);
+  assert.equal(spoken[1]!.voice, undefined);
+  assert.equal(spoken[1]!.lang, "sv");
+
+  // A listed voice of the language is still the one that speaks.
+  await speaker.start({ ...text, lang: "de", systemVoice: true }, 0, 200);
+  assert.equal(spoken[2]!.voice?.name, "Anna");
+});
+
 test("Speaker: voices that show up later clear the flag and speak", async () => {
   const { speaker, text, log } = setup(["One two three."], {}, []);
   speaker.voiceWaitMs = 0;

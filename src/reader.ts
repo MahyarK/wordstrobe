@@ -24,7 +24,7 @@ import {
 } from "./text.ts";
 
 type Status = { state: "ocr" | "error"; message?: string };
-type Load = OcrResult & { ms?: number; tables?: number; source?: string };
+type Load = OcrResult & { ms?: number; tables?: number; source?: string; voice?: boolean };
 type State = "loading" | "ready" | "playing" | "paused" | "done" | "empty" | "error";
 type View = "rsvp" | "text";
 
@@ -89,6 +89,7 @@ let paragraphs: string[] = [];
 let tokens: Token[] = [];
 let tokenFactors: number[] = []; // per-token duration multipliers: the same for every Player of this text, whatever the wpm and chunk size
 let lang = "en";
+let systemVoice = false; // macOS has a voice for `lang`, whether the webview lists it or not (speech.ts)
 let player: Player | undefined;
 let chunk = 1;
 let shown = -1; // frame currently on screen
@@ -208,6 +209,7 @@ async function onLoad(payload: Load): Promise<void> {
 
   reset();
   lang = payload.lang || "en";
+  systemVoice = payload.voice === true;
   paragraphs = toParagraphs(payload);
   tokens = tokenize(paragraphs, lang);
   tokenFactors = factors(tokens, DEFAULT_TIMING);
@@ -652,7 +654,7 @@ function speakFrom(): void {
   if (!p) return;
   cancelSpeechRestart();
   speechLive = true;
-  void speaker.start({ paragraphs, tokens, lang }, p.frames[p.frame]![0]!, p.wpm);
+  void speaker.start({ paragraphs, tokens, lang, systemVoice }, p.frames[p.frame]![0]!, p.wpm);
 }
 
 /**
