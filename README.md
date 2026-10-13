@@ -71,6 +71,10 @@ on macOS, for instance) needs a voice downloaded first: **System Settings → Ac
 voice → Manage Voices** on macOS, **Settings → Time & language → Speech** on Windows. macOS doesn't show downloaded
 voices in Wordstrobe's voice list, but uses one for a language that has no built-in voice.
 
+The language is detected from the text, and the speaker button's tooltip names it. When yours is taken for another
+one (short Persian for Arabic, say), set an override under **Settings → Voice**: *Text detected as* Arabic, *Read it
+as* Persian. It is saved with your settings and applies to every text detected that way.
+
 ## Build
 
 Rust and Node 22.18 or later on every platform, plus:

@@ -139,9 +139,17 @@ const VOICE_HELP: Record<Os, string> = {
 /** Shown instead of speaking (a toast) and as the tooltip of the disabled speaker button. */
 export const noVoicesMessage = (os: Os): string => `No system voices found — ${VOICE_HELP[os]}`;
 
+/** "Persian" for "fa-IR"; the tag itself when it is not one. */
+export function langName(lang: string): string {
+  try {
+    return new Intl.DisplayNames("en", { type: "language" }).of(langPrefix(lang)) ?? lang;
+  } catch {
+    return lang;
+  }
+}
+
 /** Shown instead of reading a text in the voice of another language. */
-export const noVoiceMessage = (lang: string, os: Os): string =>
-  `No ${new Intl.DisplayNames("en", { type: "language" }).of(langPrefix(lang))} voice found — ${VOICE_HELP[os]}`;
+export const noVoiceMessage = (lang: string, os: Os): string => `No ${langName(lang)} voice found — ${VOICE_HELP[os]}`;
 
 // WKWebView on macOS lists 68 voices, every one with default = true: the novelty ones (Albert,
 // Bad News, Zarvox, ...) and the robotic Fred/Ralph are the legacy "speech.synthesis.voice"

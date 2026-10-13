@@ -289,6 +289,7 @@ function render(): void {
   renderHotkey();
   renderPreview();
   renderVoiceSaved();
+  renderReadAs();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -414,6 +415,38 @@ voiceTest.addEventListener("click", () => {
   synth.speak(utterance);
 });
 
+// Language override: `readAs[detected] = read as`, for a language that detection takes for another one (Persian
+// for Arabic on macOS). The list is fixed, not the voices': macOS hides the downloaded ones, and a language without a
+// voice is worth choosing too, the reader then says which voice to install.
+const LANGS = (
+  "af am ar az bg bn bo ca ckb cs cy da de el en es et eu fa fi fr ga gl gu he hi hr hu hy id is it ja ka kk km kn ko " +
+  "lo lt lv ml mn mr ms my nb nl or pa pl ps pt ro ru si sk sl sr sv sw ta te th tl tr ug uk ur vi zh"
+).split(" ");
+const readFrom = $<HTMLSelectElement>("read-from");
+const readTo = $<HTMLSelectElement>("read-to");
+
+function buildReadAs(): void {
+  const named = LANGS.map((code) => [langName(code), code] as const).sort((a, b) => a[0].localeCompare(b[0]));
+  readFrom.replaceChildren(...named.map((n) => new Option(...n)), new Option("Not recognised", "und"));
+  readTo.replaceChildren(new Option("As detected", ""), ...named.map((n) => new Option(...n)));
+  readFrom.value = Object.keys(current.readAs)[0] ?? systemLang; // the override there is, else a likely one to want
+}
+
+function renderReadAs(): void {
+  readTo.value = current.readAs[readFrom.value] ?? "";
+  const pairs = Object.entries(current.readAs).map(([from, to]) => `${from === "und" ? "Not recognised" : langName(from)} → ${langName(to)}`);
+  $("read-saved").textContent = pairs.length ? `Overrides: ${pairs.join(" · ")}` : "No override: text is read in the language it is detected as.";
+}
+
+readFrom.addEventListener("change", renderReadAs);
+readTo.addEventListener("change", () => {
+  const readAs = { ...current.readAs };
+  if (readTo.value && readTo.value !== readFrom.value) readAs[readFrom.value] = readTo.value;
+  else delete readAs[readFrom.value];
+  change("readAs", readAs);
+  renderReadAs();
+});
+
 function setVoiceMessage(text: string): void {
   voiceMessage.textContent = text;
 }
@@ -524,6 +557,7 @@ async function main(): Promise<void> {
   Object.assign(current, await readAll());
   voicesJson = JSON.stringify(current.voices);
   selectedUri = current.voices[systemLang] ?? "";
+  buildReadAs();
   render();
   initVoices();
 

@@ -21,6 +21,8 @@ export type Prefs = {
   voiceMode: VoiceMode;
   /** language prefix ("en") -> voiceURI */
   voices: Record<string, string>;
+  /** detected language prefix ("ar") -> the language to read such text in ("fa"): the user's correction of a wrong detection */
+  readAs: Record<string, string>;
   /** voiceURI -> measured speed of the voice at rate 1, in words per minute (written by the reader's calibration) */
   voiceBaseWpm: Record<string, number>;
   /** Read-only in the UI; Rust registers it at startup. */
@@ -41,6 +43,7 @@ export const DEFAULTS: Readonly<Prefs> = {
   readAloud: false,
   voiceMode: "along",
   voices: {},
+  readAs: {},
   voiceBaseWpm: {},
   hotkeyRegion: "Alt+Shift+R",
 };
@@ -97,6 +100,7 @@ export function normalize(raw: Record<string, unknown> = {}): Prefs {
     readAloud: bool(raw.readAloud, DEFAULTS.readAloud),
     voiceMode: oneOf(raw.voiceMode, VOICE_MODES, DEFAULTS.voiceMode),
     voices: pick(raw.voices, (v): v is string => typeof v === "string" && v !== ""),
+    readAs: pick(raw.readAs, (v): v is string => typeof v === "string" && v !== ""),
     voiceBaseWpm: pick(
       raw.voiceBaseWpm,
       (v): v is number => finite(v) && v >= BASE_WPM.min && v <= BASE_WPM.max,

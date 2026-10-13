@@ -8,7 +8,7 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { blockBrowserShortcuts, initPlatform, keyChord, keyHint, modifier, platform, type PlatformInfo } from "./os.ts";
 import { Player } from "./player.ts";
 import { DEFAULTS, LIMITS, normalize, readPrefs, type Prefs } from "./prefs.ts";
-import { Speaker, VOICE_GRACE_MS, loadVoices, noVoicesMessage } from "./speech.ts";
+import { Speaker, VOICE_GRACE_MS, langName, langPrefix, loadVoices, noVoicesMessage } from "./speech.ts";
 import {
   DEFAULT_TIMING,
   factors,
@@ -24,7 +24,7 @@ import {
 } from "./text.ts";
 
 type Status = { state: "ocr" | "error"; message?: string };
-type Load = OcrResult & { ms?: number; tables?: number; source?: string; voice?: boolean };
+type Load = OcrResult & { ms?: number; tables?: number; source?: string; voices?: string[] };
 type State = "loading" | "ready" | "playing" | "paused" | "done" | "empty" | "error";
 type View = "rsvp" | "text";
 
@@ -88,7 +88,7 @@ let dismissed = false; // closed with Esc while OCR was still running: the resul
 let paragraphs: string[] = [];
 let tokens: Token[] = [];
 let tokenFactors: number[] = []; // per-token duration multipliers: the same for every Player of this text, whatever the wpm and chunk size
-let lang = "en";
+let lang = "en"; // what the text is read as: the detected language, or the user's override for it (Settings › Voice)
 let systemVoice = false; // macOS has a voice for `lang`, whether the webview lists it or not (speech.ts)
 let player: Player | undefined;
 let chunk = 1;
@@ -151,7 +151,7 @@ function applyPlatform({ os }: PlatformInfo): void {
 function renderSpeakButton(): void {
   const why = !speaker.supported ? "Read aloud is not available here" : voiceless ? noVoicesMessage(platform().os) : "";
   speakBtn.disabled = why !== "";
-  speakBtn.title = why || "Read aloud (S)";
+  speakBtn.title = why || `Read aloud (S) · ${langName(lang)}`; // names the language, for whoever has to correct it
 }
 
 function setVoiceless(none: boolean): void {
@@ -208,8 +208,10 @@ async function onLoad(payload: Load): Promise<void> {
   speaker.baseWpms = { ...s.voiceBaseWpm };
 
   reset();
-  lang = payload.lang || "en";
-  systemVoice = payload.voice === true;
+  const detected = payload.lang || "en";
+  lang = s.readAs[langPrefix(detected)] ?? detected;
+  systemVoice = payload.voices?.includes(langPrefix(lang)) ?? false;
+  renderSpeakButton();
   paragraphs = toParagraphs(payload);
   tokens = tokenize(paragraphs, lang);
   tokenFactors = factors(tokens, DEFAULT_TIMING);

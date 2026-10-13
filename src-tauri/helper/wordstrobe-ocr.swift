@@ -289,9 +289,7 @@ func respond(_ text: String) async -> [String: Any] {
     do {
         let ocr = try await recognize(try loadImage(path), langs: request["langs"] as? [String] ?? [],
                                       fast: request["fast"] as? Bool ?? false)
-        // "voice": macOS speaks this language. The webview cannot tell: WebKit lists only the voices macOS ships with,
-        // not the ones the user downloaded (all there is for Persian), yet speaks with those when asked for the language.
-        var response: [String: Any] = ["id": id, "lang": ocr.lang, "voice": AVSpeechSynthesisVoice(language: ocr.lang) != nil]
+        var response: [String: Any] = ["id": id, "lang": ocr.lang, "voices": voiceLanguages]
         if let paragraphs = ocr.paragraphs {
             response["paragraphs"] = paragraphs.map(\.text)
             response["tables"] = ocr.tables
@@ -370,7 +368,17 @@ func halfCut(_ page: Layout, top: Bool, visible: Double) -> CGImage {
 func warmUp() async {
     do { _ = try await recognize(render("Warm up the reader now.", size: 14, fontName: nil, dark: false), langs: [], fast: false) }
     catch { warn("pre-warm failed: \(error.localizedDescription)") }
-    _ = AVSpeechSynthesisVoice(language: "en")  // the first lookup loads the voice list (40 ms), later ones take under 1 ms
+    loadVoiceLanguages()
+}
+
+/// The languages macOS has a voice for ("en", "fa", ...), sent with every reply as "voices". The webview cannot tell:
+/// WebKit lists only the voices macOS ships with, not the ones the user downloaded (all there is for Persian), yet speaks
+/// with those when asked for the language. `speechVoices()` takes 55 ms, too long to sit in a reply, so the list is read
+/// at start and again after every reply: a voice downloaded meanwhile shows up one read later.
+nonisolated(unsafe) var voiceLanguages: [String] = []
+
+func loadVoiceLanguages() {
+    voiceLanguages = Set(AVSpeechSynthesisVoice.speechVoices().map { String($0.language.prefix { $0 != "-" }) }).sorted()
 }
 
 // MARK: - --selftest
@@ -568,7 +576,7 @@ func selftest() async -> Bool {
     for (passage, lang) in zip(passages, ["en", "de", "zh-Hans"]) {
         id += 1
         let r = await request(render(passage.text, size: 14, fontName: passage.font, dark: false), id: id, langs: [], fast: false)
-        expect(r["id"] as? Int == id && r["lang"] as? String == lang && r["voice"] is Bool && r["error"] == nil && r["ms"] is Int,
+        expect(r["id"] as? Int == id && r["lang"] as? String == lang && (r["voices"] as? [String])?.contains("en") == true && r["error"] == nil && r["ms"] is Int,
                "protocol \(passage.name): id/lang/ms in \(r.keys.sorted()), lang=\(r["lang"] ?? "nil") want \(lang)")
         expect((r["paragraphs"] as? [String])?.isEmpty == false || (r["lines"] as? [[String: Any]])?.isEmpty == false, "protocol \(passage.name): no text")
     }
@@ -608,4 +616,5 @@ send(["ready": true])
 while let line = readLine() {
     if line.allSatisfy(\.isWhitespace) { continue }
     await serve(line)
+    loadVoiceLanguages()
 }

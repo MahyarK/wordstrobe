@@ -120,8 +120,8 @@ pub fn ocr(capture: &Capture) -> Result<OcrResult>;   // { paragraphs?, lines?, 
 **Rust ⇄ `wordstrobe-ocr`** (one JSON object per line):
 ```jsonc
 → {"id":7,"path":"/…/wordstrobe/7.png","langs":[],"fast":false}
-← {"id":7,"paragraphs":["Rapid serial visual …"],"lang":"en","voice":true,"ms":271}     // macOS 26+; voice: macOS can speak `lang`
-← {"id":7,"lines":[{"t":"Rapid serial","x":0.04,"y":0.06,"w":0.5,"h":0.03,"c":0.98}],"lang":"en","voice":true,"ms":300} // macOS 15–25
+← {"id":7,"paragraphs":["Rapid serial visual …"],"lang":"en","voices":["de","en","fa"],"ms":271}     // macOS 26+; voices: the languages macOS can speak
+← {"id":7,"lines":[{"t":"Rapid serial","x":0.04,"y":0.06,"w":0.5,"h":0.03,"c":0.98}],"lang":"en","voices":["de","en","fa"],"ms":300} // macOS 15–25
 ← {"id":7,"error":"…"}
 ```
 On start, the helper OCRs a small rendered text image to pre-warm Vision (a blank image doesn't load the recognizer), then prints `{"ready":true}`.

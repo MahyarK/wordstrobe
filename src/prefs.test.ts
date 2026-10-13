@@ -23,6 +23,7 @@ test("normalize: valid values pass through untouched", () => {
     readAloud: true,
     voiceMode: "voice",
     voices: { en: "com.apple.voice.premium.en-US.Zoe" },
+    readAs: { ar: "fa" },
     voiceBaseWpm: { "com.apple.voice.premium.en-US.Zoe": 212 },
     hotkeyRegion: "Alt+Shift+X",
     readerSize: { w: 600, h: 220 },
@@ -71,6 +72,8 @@ test("normalize: enums and booleans accept only their own values", () => {
 test("normalize: voices keeps only non-empty string ids, and only from a plain object", () => {
   assert.deepEqual(normalize({ voices: { en: "a", de: "", fr: 3, nl: null, es: ["x"] } }).voices, { en: "a" });
   for (const bad of ["en", 5, null, ["a"], true]) assert.deepEqual(normalize({ voices: bad }).voices, {}, String(bad));
+  assert.deepEqual(normalize({ readAs: { ar: "fa", und: "", ur: 3 } }).readAs, { ar: "fa" });
+  assert.deepEqual(normalize({ readAs: "fa" }).readAs, {});
 });
 
 test("normalize: voiceBaseWpm keeps only plausible finite numbers (a NaN rate would reach the speech engine)", () => {

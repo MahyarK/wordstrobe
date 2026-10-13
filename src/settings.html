@@ -184,6 +184,20 @@
             </div>
             <button id="voice-test" type="button">Test voice</button>
           </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="read-from">Text detected as</label>
+              <p class="row-hint" id="read-hint">The language is detected from the text. The reader's speaker button names it.</p>
+            </div>
+            <select id="read-from" aria-describedby="read-hint"></select>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <label class="row-title" for="read-to">Read it as</label>
+              <p id="read-saved" class="row-hint"></p>
+            </div>
+            <select id="read-to" aria-describedby="read-saved"></select>
+          </div>
         </div>
       </section>
 
