@@ -207,10 +207,22 @@ func transcript(_ p: Paragraph, keeping kept: [Line]) -> String {
 let minLanguageShare = 0.5
 
 func language(of texts: [String]) -> String {
-    let recognizer = NLLanguageRecognizer()
-    recognizer.processString(texts.joined(separator: "\n"))
+    let recognizer = NLLanguageRecognizer(), text = texts.joined(separator: "\n")
+    recognizer.processString(text)
     guard let best = recognizer.languageHypotheses(withMaximum: 1).first, best.value >= minLanguageShare else { return "und" }
-    return best.key.rawValue
+    return best.key == .arabic && isPersian(text) ? "fa" : best.key.rawValue
+}
+
+/// NLLanguageRecognizer has no Persian: whole Persian paragraphs come back ar = 1.00 (macOS 26). Vision has none either and
+/// reads it with its Arabic model, so ی ک گ چ ژ arrive as ي/ى ك ك ج ز and the letters cannot tell the two apart. Persian's
+/// commonest function words can, against what Arabic is full of: the article ال, ة and the hamza seats أ إ.
+let persianWords: Set<String> = ["به", "که", "از", "را", "این", "است", "با", "برای", "تا", "هر", "یک", "در", "آن", "می", "بود", "همه"]
+
+func isPersian(_ text: String) -> Bool {
+    let words = text.replacing("ي", with: "ی").replacing("ى", with: "ی").replacing("ك", with: "ک").split { !$0.isLetter }
+    let persian = words.filter { persianWords.contains(String($0)) }.count
+    let arabic = words.filter { $0.hasPrefix("ال") || $0.contains { "ةأإ".contains($0) } }.count
+    return persian > arabic
 }
 
 /// `documents: false` forces the text path on macOS 26+ (the selftest compares both).
@@ -510,6 +522,10 @@ func selftest() async -> Bool {
         }
     }
     expect(language(of: ["120 135 98 110"]) == "und", "language of digits only")
+    // As Vision reads them (Persian through its Arabic model: ي and ى for ی, ك for ک).
+    expect(language(of: ["سلام به همه عزيزان دل روزتون بخير و خوبى و بسلامتى"]) == "fa", "language of Persian")
+    expect(language(of: ["اين يك متن فارسى است كه براى آزمايش نوشته شده. البته الان هوا خيلى خوب است."]) == "fa", "language of Persian with Arabic loans")
+    expect(language(of: ["ذهب الولد إلى المدرسة في الصباح وقرأ كتابا جديدا عن تاريخ المدينة القديمة به"]) == "ar", "language of Arabic")
 
     // Tall: every section has a unique number, so a line lost or repeated at a band seam shows up.
     let sections = (1...24).map { "Section \($0). " + passages[$0 % 2].text }

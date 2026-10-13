@@ -10,6 +10,7 @@ import {
   Speaker,
   WEBKIT_CURVE,
   curveFor,
+  noVoiceMessage,
   noVoicesMessage,
   pickVoice,
   rateFor,
@@ -126,6 +127,17 @@ test("pickVoice: the saved voice for the language wins; unknown ids and language
   assert.equal(pickVoice("en", macVoices, { en: "gone" })?.name, "Samantha");
   assert.ok(pickVoice("sv", macVoices)); // no Swedish voice: the first default one
   assert.equal(pickVoice("en", []), undefined);
+});
+
+test("pickVoice: the default voice stands in for a language without one only in its own script", () => {
+  const majed = voice("Majed", "ar-001", "com.apple.voice.compact.ar-001.Maged");
+  const dariush = voice("Dariush", "fa-IR", "com.apple.voice.compact.fa-IR.Dariush");
+  assert.equal(pickVoice("fa", [...macVoices, majed]), undefined); // not Albert, and not Arabic either
+  assert.equal(pickVoice("fa", [majed]), majed); // the system's own voice: same script, the old fallback
+  assert.equal(pickVoice("fa", [...macVoices, majed, dariush]), dariush);
+  assert.equal(pickVoice("ja", macVoices), undefined);
+  assert.equal(pickVoice("und", [majed])?.name, "Majed"); // language unknown: whatever the system speaks
+  assert.equal(pickVoice("fa", [voice("Odd", "x_y!", "odd")])?.name, "Odd"); // a tag nobody can place
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -466,6 +478,15 @@ test("Speaker: an engine without voices reports it and speaks nothing", async ()
   } finally {
     setPlatform(fallbackInfo("macos"));
   }
+});
+
+test("Speaker: a language no installed voice can read is named, and nothing is spoken", async () => {
+  const { speaker, text, log } = setup(["سلام به همه"]);
+  await speaker.start({ ...text, lang: "fa" }, 0, 200);
+  assert.deepEqual(log.errors, ["No Persian voice found — add some under Spoken Content"]);
+  assert.equal(log.errors[0], noVoiceMessage("fa-IR", "macos"));
+  assert.equal(spoken.length, 0);
+  assert.equal(speaker.voiceless, false, "the engine has voices: the speaker button stays");
 });
 
 test("Speaker: voices that show up later clear the flag and speak", async () => {

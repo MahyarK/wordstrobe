@@ -133,6 +133,10 @@ const VOICE_HELP: Record<Os, string> = {
 /** Shown instead of speaking (a toast) and as the tooltip of the disabled speaker button. */
 export const noVoicesMessage = (os: Os): string => `No system voices found — ${VOICE_HELP[os]}`;
 
+/** Shown instead of reading a text in the voice of another language. */
+export const noVoiceMessage = (lang: string, os: Os): string =>
+  `No ${new Intl.DisplayNames("en", { type: "language" }).of(langPrefix(lang))} voice found — ${VOICE_HELP[os]}`;
+
 // WKWebView on macOS lists 68 voices, every one with default = true: the novelty ones (Albert,
 // Bad News, Zarvox, ...) and the robotic Fred/Ralph are the legacy "speech.synthesis.voice"
 // family, while real voices say how good they are in their URI (com.apple.voice.premium.en-US.Zoe,
@@ -147,9 +151,22 @@ function score(v: SpeechSynthesisVoice): number {
   return s;
 }
 
+/** The script a language is written in ("Latn", "Arab", ...); undefined for "und" or a malformed tag. */
+function scriptOf(lang: string): string | undefined {
+  const prefix = langPrefix(lang);
+  if (prefix === "und") return undefined;
+  try {
+    return new Intl.Locale(prefix).maximize().script;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The saved voice for the language (`stored[langPrefix]` = voiceURI), else the best local voice
- * for it (Premium, then Enhanced, then any local one), else the system default.
+ * for it (Premium, then Enhanced, then any local one), else the system default, unless that one is
+ * written in another script: an English voice gets through Swedish, but says nothing of Persian,
+ * and an Arabic one reads it as Arabic.
  */
 export function pickVoice(
   lang: string,
@@ -164,7 +181,10 @@ export function pickVoice(
     if (langPrefix(v.lang) !== prefix) continue;
     if (!best || score(v) > score(best)) best = v;
   }
-  return best ?? voices.find((v) => v.default) ?? voices[0];
+  if (best) return best;
+  const fallback = voices.find((v) => v.default) ?? voices[0];
+  const [wanted, got] = [scriptOf(prefix), fallback && scriptOf(fallback.lang)];
+  return wanted && got && wanted !== got ? undefined : fallback;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -234,6 +254,7 @@ export class Speaker {
     this.text = text;
     this.target = wpm;
     this.voice = pickVoice(text.lang, voices, this.voices);
+    if (!this.voice) return this.hooks.error(noVoiceMessage(text.lang, platform().os));
     this.key = this.voice?.voiceURI ?? `default:${langPrefix(text.lang)}`;
     this.calibrated = this.baseWpms[this.key] !== undefined;
     this.baseWpm = this.baseWpms[this.key] ?? DEFAULT_BASE_WPM;

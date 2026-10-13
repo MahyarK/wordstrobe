@@ -126,7 +126,7 @@ const speaker = new Speaker({
     cancelSpeechRestart();
     setSpeech(false);
     if (speaker.voiceless) setVoiceless(true);
-    toast(message, speaker.voiceless ? 5000 : undefined);
+    toast(message);
     if (state === "playing" && player) {
       player.play(performance.now());
       loop();
@@ -422,7 +422,7 @@ function updateStats(): void {
   if (text !== lastStats) statsEl.textContent = lastStats = text;
 }
 
-function toast(text: string, ms = 1600): void {
+function toast(text: string, ms = text.length > 34 ? 5000 : 1600): void {
   toastEl.textContent = text;
   toastEl.toggleAttribute("data-wide", text.length > 34); // a long one takes the stats' place in the footer
   clearTimeout(toastTimer);
